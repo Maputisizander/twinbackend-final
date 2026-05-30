@@ -8,11 +8,11 @@ Laravel 11 API backend for a multi-company telco field operations platform. Serv
 
 ## Tunnel / Base URL
 ```
-https://disguisedly-enarthrodial-kristi.ngrok-free.dev
+https://7a33-112-210-248-33.ngrok-free.app
 API prefix: /api/v1   (set in bootstrap/app.php → apiPrefix)
 ```
 All routes in `routes/api.php` are automatically prefixed with `/api/v1`.  
-Every request needs header: `ngrok-skip-browser-warning: 1`
+ngrok — every request needs header: `ngrok-skip-browser-warning: 1`
 
 ## Auth
 Laravel Sanctum (Bearer tokens). Each company has its own middleware:

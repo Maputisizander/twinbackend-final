@@ -18,6 +18,12 @@ return Application::configure(basePath: dirname(__DIR__))
             'company'     => \App\Http\Middleware\EnsureCompany::class,
             'asbuilt.key' => \App\Http\Middleware\AsBuiltApiKey::class,
         ]);
+
+        // Apply to every API route: structured logging + ETag fallback for uncached endpoints
+        $middleware->appendToGroup('api', [
+            \App\Http\Middleware\ApiRequestLogger::class,
+            \App\Http\Middleware\ETagMiddleware::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, Request $request) {

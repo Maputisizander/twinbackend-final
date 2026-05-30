@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Http\Concerns\CachesApiResponse;
 use App\Http\Concerns\StoresPhotos;
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\RedisCache;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -14,7 +16,8 @@ use Illuminate\Support\Str;
 
 abstract class BaseAuthController extends Controller
 {
-    use StoresPhotos;
+    use StoresPhotos, CachesApiResponse;
+
     abstract protected function company(): string;
 
     public function login(Request $request): JsonResponse
@@ -43,6 +46,9 @@ abstract class BaseAuthController extends Controller
 
         $user->update(['last_login' => now()]);
 
+        // Bust stale /me cache so the fresh login_at is visible immediately
+        $this->bustCache(RedisCache::userKey($user->id, 'me'));
+
         $token = $user->createToken($this->company() . '-token')->plainTextToken;
 
         return response()->json([
@@ -54,13 +60,37 @@ abstract class BaseAuthController extends Controller
 
     public function logout(Request $request): JsonResponse
     {
+        $user = $request->user();
         $request->user()->currentAccessToken()->delete();
+
+        // Bust /me cache on logout so stale data never leaks to next session
+        $this->bustCache(RedisCache::userKey($user->id, 'me'));
+
         return response()->json(['message' => 'Logged out successfully.']);
     }
 
+    /**
+     * GET /me — user-private, cached 5 min per user.
+     *
+     * Cache key: cache:user:{id}:me
+     * ETag key:  cache:user:{id}:me:etag
+     *
+     * Mobile calls this on every app open / resume.  With a 5-minute Redis
+     * cache and ETag support, repeated calls within the TTL return 304 with
+     * zero DB queries.
+     */
     public function me(Request $request): JsonResponse
     {
-        return response()->json($this->userResource($request->user()));
+        $user     = $request->user();
+        $cacheKey = RedisCache::userKey($user->id, 'me');
+
+        return $this->cachedResponse(
+            cacheKey:   $cacheKey,
+            ttl:        RedisCache::TTL_ME,
+            callback:   fn () => $this->userResource($user),
+            request:    $request,
+            visibility: 'private',
+        );
     }
 
     public function updateProfile(Request $request): JsonResponse
@@ -68,11 +98,11 @@ abstract class BaseAuthController extends Controller
         $user = $request->user();
 
         $data = $request->validate([
-            'first_name'   => 'sometimes|string|max:100',
-            'last_name'    => 'sometimes|string|max:100',
-            'cellphone'    => 'sometimes|string|max:20',
-            'address'      => 'sometimes|string',
-            'profile_photo'=> 'sometimes|image|max:10240',
+            'first_name'    => 'sometimes|string|max:100',
+            'last_name'     => 'sometimes|string|max:100',
+            'cellphone'     => 'sometimes|string|max:20',
+            'address'       => 'sometimes|string',
+            'profile_photo' => 'sometimes|image|max:10240',
         ]);
 
         if ($request->hasFile('profile_photo')) {
@@ -82,6 +112,9 @@ abstract class BaseAuthController extends Controller
         $old = $user->only(array_keys($data));
         $user->update($data);
         \App\Models\AuditLog::record('update', $user, $old, $user->fresh()->only(array_keys($data)));
+
+        // Bust /me cache so the next request gets fresh profile data
+        $this->bustCache(RedisCache::userKey($user->id, 'me'));
 
         return response()->json($this->userResource($user->fresh()));
     }
@@ -106,6 +139,9 @@ abstract class BaseAuthController extends Controller
             'password_reset_required' => false,
             'temp_password_set_at'    => null,
         ]);
+
+        // Bust /me cache — password_reset_required flag changed
+        $this->bustCache(RedisCache::userKey($user->id, 'me'));
 
         return response()->json(['message' => 'Password changed successfully.']);
     }
@@ -168,5 +204,4 @@ abstract class BaseAuthController extends Controller
             'is_online'               => $user->isOnline(),
         ];
     }
-
 }

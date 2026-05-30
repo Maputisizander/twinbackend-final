@@ -8,10 +8,11 @@ class WarehouseReceipt extends Model
 {
     protected $fillable = [
         'warehouse_id', 'subcontractor_id', 'node_id',
-        'received_by', 'approved_by', 'receipt_date', 'status',
+        'received_by', 'approved_by', 'receipt_date', 'status', 'notes', 'proof_image',
+        'submitted_lat', 'submitted_lng',
     ];
 
-    protected $casts = ['receipt_date' => 'date'];
+    protected $casts = ['receipt_date' => 'date:Y-m-d'];
 
     public function warehouse()     { return $this->belongsTo(Warehouse::class); }
     public function subcontractor() { return $this->belongsTo(Subcontractor::class); }

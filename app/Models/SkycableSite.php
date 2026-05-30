@@ -13,5 +13,5 @@ class SkycableSite extends Model
 
     public function area()     { return $this->belongsTo(SkycableArea::class, 'area_id'); }
     public function barangay() { return $this->belongsTo(PsgcBarangay::class, 'barangay_code', 'code'); }
-    public function nodes()    { return $this->hasMany(SkycableNode::class, 'site_id'); }
+    public function nodes()    { return $this->hasMany(SkycableNode::class, 'node_id'); }
 }

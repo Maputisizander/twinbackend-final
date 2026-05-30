@@ -9,8 +9,8 @@ use App\Http\Controllers\Api;
 |--------------------------------------------------------------------------
 */
 
+// Single health-check endpoint. /v1/ping was a duplicate (routing prefix already adds /api/v1).
 Route::get('/ping', fn () => response()->json(['status' => 'ok', 'version' => 'v1']));
-Route::get('/v1/ping', fn () => response()->json(['status' => 'ok', 'version' => 'v1']));
 
 // ── Public file serving (no auth — images embedded in reports) ────────────────
 Route::get('/files/{path}', function (string $path) {
@@ -147,6 +147,8 @@ Route::prefix('skycable')->middleware(['auth:sanctum', 'company:skycable'])->gro
     Route::put('nodes/{node}/poles/{skycablePole}',     [Api\Skycable\PoleController::class, 'updatePole']);
     Route::patch('nodes/{node}/poles/sync',             [Api\Skycable\PoleController::class, 'syncPole']);
     Route::post('poles/{pole}/report',                  [Api\Skycable\PoleController::class, 'storeReport']);
+    Route::get('pole-reports',                          [Api\Skycable\PoleController::class, 'listReports']);
+    Route::get('pole-reports/{poleReport}',             [Api\Skycable\PoleController::class, 'showReport']);
     Route::get('nodes/{node}/pole-photos',              [Api\Skycable\NodeController::class, 'polePhotos']);
     Route::post('poles',             [Api\Skycable\PoleController::class, 'store']);
     Route::get('poles/code/{code}',  [Api\Skycable\PoleController::class, 'showByCode']);
@@ -169,6 +171,7 @@ Route::prefix('skycable')->middleware(['auth:sanctum', 'company:skycable'])->gro
     Route::post('spans',                           [Api\Skycable\SpanController::class, 'store']);
     Route::get('spans/{span}',                     [Api\Skycable\SpanController::class, 'show']);
     Route::put('spans/{span}',                     [Api\Skycable\SpanController::class, 'update']);
+    Route::delete('spans/{span}',                  [Api\Skycable\SpanController::class, 'destroy']);
     Route::put('spans/{span}/components',          [Api\Skycable\SpanController::class, 'updateComponents']);
     Route::post('spans/{span}/split',              [Api\Skycable\SpanController::class, 'split']);
 
@@ -190,12 +193,16 @@ Route::prefix('skycable')->middleware(['auth:sanctum', 'company:skycable'])->gro
 
     // Warehouse & Stock
     Route::get('warehouses',                        [Api\Skycable\WarehouseController::class, 'index']);
+    Route::post('warehouses',                       [Api\Skycable\WarehouseController::class, 'store']);
     Route::get('warehouses/{warehouse}',            [Api\Skycable\WarehouseController::class, 'show']);
     Route::put('warehouses/{warehouse}',            [Api\Skycable\WarehouseController::class, 'update']);
     Route::get('warehouses/{warehouse}/stocks',     [Api\Skycable\WarehouseController::class, 'stocks']);
     Route::get('warehouses/{warehouse}/receipts',   [Api\Skycable\WarehouseController::class, 'receipts']);
-    Route::post('warehouse-receipts',               [Api\Skycable\WarehouseController::class, 'receiveStock']);
-    Route::put('warehouse-receipts/{receipt}/approve',[Api\Skycable\WarehouseController::class, 'approveReceipt']);
+    Route::post('warehouse-receipts',                     [Api\Skycable\WarehouseController::class, 'receiveStock']);
+    Route::get('warehouse-receipts/{receipt}',            [Api\Skycable\WarehouseController::class, 'showReceipt']);
+    Route::put('warehouse-receipts/{receipt}/approve',    [Api\Skycable\WarehouseController::class, 'approveReceipt']);
+    Route::put('warehouse-receipts/{receipt}/arrive',     [Api\Skycable\WarehouseController::class, 'arrive']);
+    Route::post('warehouse-receipts/{receipt}/verify',    [Api\Skycable\WarehouseController::class, 'verifyAndApprove']);
 
     // Pickup Requests & Deliveries
     Route::get('pickup-requests',                        [Api\Skycable\DeliveryController::class, 'pickupRequests']);

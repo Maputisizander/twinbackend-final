@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Skycable;
 
+use App\Http\Concerns\CachesSkycableResponses;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\SkycableArea;
@@ -9,6 +10,8 @@ use Illuminate\Http\Request;
 
 class AreaController extends Controller
 {
+    use CachesSkycableResponses;
+
     public function index(Request $request)
     {
         $teamId = $request->team_id;
@@ -25,7 +28,7 @@ class AreaController extends Controller
             $query->whereHas('nodes', fn ($q) => $q->where('team_id', $teamId));
         }
 
-        return response()->json($query->get());
+        return $this->skycableCachedJson('areas.index', 300, fn () => $query->get(), $request);
     }
 
     public function store(Request $request)
@@ -34,13 +37,14 @@ class AreaController extends Controller
 
         $area = SkycableArea::create($data);
         AuditLog::record('create', $area, null, $area->toArray());
+        $this->bumpSkycableCacheVersion();
 
         return response()->json($area, 201);
     }
 
     public function show(SkycableArea $area)
     {
-        return response()->json($area->load('nodes'));
+        return $this->skycableCachedJson("areas.show.{$area->id}", 300, fn () => $area->load('nodes'));
     }
 
     public function update(Request $request, SkycableArea $area)
@@ -50,6 +54,7 @@ class AreaController extends Controller
         $old = $area->toArray();
         $area->update($data);
         AuditLog::record('update', $area, $old, $area->toArray());
+        $this->bumpSkycableCacheVersion();
 
         return response()->json($area);
     }
@@ -58,6 +63,7 @@ class AreaController extends Controller
     {
         AuditLog::record('delete', $area, $area->toArray(), null);
         $area->delete();
+        $this->bumpSkycableCacheVersion();
 
         return response()->json(['message' => 'Area deleted.']);
     }

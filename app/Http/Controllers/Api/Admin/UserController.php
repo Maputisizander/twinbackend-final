@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers\Api\Admin;
 
-use App\Http\Controllers\Api\BaseAuthController;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\User;
@@ -19,14 +18,18 @@ class UserController extends Controller
             ->when($request->company, fn ($q) => $q->where('company', $request->company))
             ->when($request->role, fn ($q) => $q->where('role', $request->role))
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
-            ->when($request->subcontractor_id, fn ($q) => $q->where('subcontractor_id', $request->subcontractor_id))
+            ->when($request->subcontractor_id, fn ($q) => $q->where(function ($inner) use ($request) {
+                $inner->where('subcontractor_id', $request->subcontractor_id)
+                      ->orWhereHas('team', fn ($t) => $t->where('subcontractor_id', $request->subcontractor_id));
+            }))
             ->when($request->search, fn ($q) => $q->where(function ($q2) use ($request) {
                 $q2->where('first_name', 'like', '%' . $request->search . '%')
                    ->orWhere('last_name', 'like', '%' . $request->search . '%')
                    ->orWhere('email', 'like', '%' . $request->search . '%');
             }));
 
-        return response()->json($query->paginate(30));
+        $perPage = min((int) ($request->per_page ?? 30), 200);
+        return response()->json($query->paginate($perPage));
     }
 
     public function store(Request $request)
@@ -41,8 +44,9 @@ class UserController extends Controller
             'address'          => 'nullable|string',
             'subcontractor_id' => 'nullable|exists:subcontractors,id',
             'team_id'          => 'nullable|exists:teams,id',
-            'project_access'   => 'nullable|array',
-            'status'           => 'nullable|in:active,inactive,on_hold',
+            'project_access'       => 'nullable|array',
+            'status'               => 'nullable|in:active,inactive,on_hold',
+            'can_approve_delivery' => 'nullable|boolean',
         ]);
 
         $tempPassword = Str::random(12);
@@ -77,7 +81,8 @@ class UserController extends Controller
             'address'          => 'sometimes|nullable|string',
             'subcontractor_id' => 'sometimes|nullable|exists:subcontractors,id',
             'team_id'          => 'sometimes|nullable|exists:teams,id',
-            'project_access'   => 'sometimes|nullable|array',
+            'project_access'       => 'sometimes|nullable|array',
+            'can_approve_delivery' => 'sometimes|boolean',
         ]);
 
         $old = $user->toArray();

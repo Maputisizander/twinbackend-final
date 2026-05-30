@@ -11,6 +11,7 @@ use App\Models\SkycablePole;
 use App\Models\SkycableSpan;
 use App\Models\SkycableSpanSummary;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class AsBuiltController extends Controller
@@ -18,33 +19,11 @@ class AsBuiltController extends Controller
     /**
      * POST /asbuilt/import
      *
-     * Bulk JSON import from AsBuilt IQ sitemap reader.
-     * Auth: X-AsBuilt-Key header (no user credentials needed).
-     * Automatically marks the node report_type = full_report.
-     *
-     * ── Request body ─────────────────────────────────────────────────────────
-     * {
-     *   "node_id": 1,
-     *   "poles": [
-     *     { "pole_code": "PL-001", "latitude": 14.5995, "longitude": 120.9842 }
-     *   ],
-     *   "spans": [
-     *     {
-     *       "from_pole_code": "PL-001",
-     *       "to_pole_code":   "PL-002",
-     *       "strand_length":  50.5,
-     *       "number_of_runs": 1,
-     *       "components": {
-     *         "node":         2,
-     *         "amplifier":    1,
-     *         "extender":     0,
-     *         "tsc":          1,
-     *         "powersupply":  0,
-     *         "ps_housing":   0
-     *       }
-     *     }
-     *   ]
-     * }
+     * node_id  = the VARCHAR identifier string (e.g. "TY1401") stored in skycable_nodes.node_id
+     * node_name = human name like "MONTEVISTA SUBD." — saved to skycable_nodes.name
+     * region / province / city = passed in payload, saved to node
+     * poles[].barangay_name = optional per pole; node.barangay_name = majority value
+     * source_file is set to "asbuilt" automatically
      */
     public function import(Request $request)
     {
@@ -52,90 +31,126 @@ class AsBuiltController extends Controller
         if ($request->hasFile('file')) {
             $file = $request->file('file');
 
-            if (!in_array($file->getMimeType(), ['application/json', 'text/plain', 'text/json'])) {
+            if (! in_array($file->getMimeType(), ['application/json', 'text/plain', 'text/json'])) {
                 return response()->json(['message' => 'Uploaded file must be a .json file.'], 422);
             }
 
             $decoded = json_decode(file_get_contents($file->getRealPath()), true);
 
             if (json_last_error() !== JSON_ERROR_NONE) {
-                return response()->json(['message' => 'Invalid JSON file: ' . json_last_error_msg()], 422);
+                return response()->json(['message' => 'Invalid JSON file: '.json_last_error_msg()], 422);
             }
 
-            // Merge decoded JSON into the request so validation works normally
             $request->merge($decoded);
         }
 
         $request->validate([
-            'node_id'                          => 'required|exists:skycable_nodes,id',
-            'poles'                            => 'required|array|min:1',
-            'poles.*.pole_code'                => 'required|string|max:100',
-            'poles.*.latitude'                 => 'nullable|numeric|between:-90,90',
-            'poles.*.longitude'                => 'nullable|numeric|between:-180,180',
-            'spans'                            => 'nullable|array',
-            'spans.*.from_pole_code'           => 'required|string',
-            'spans.*.to_pole_code'             => 'required|string',
-            'spans.*.strand_length'            => 'nullable|numeric|min:0',
-            'spans.*.number_of_runs'           => 'nullable|integer|min:1',
-            'spans.*.components'               => 'nullable|array',
-            'spans.*.components.node'          => 'nullable|integer|min:0',
-            'spans.*.components.amplifier'     => 'nullable|integer|min:0',
-            'spans.*.components.extender'      => 'nullable|integer|min:0',
-            'spans.*.components.tsc'           => 'nullable|integer|min:0',
-            'spans.*.components.powersupply'   => 'nullable|integer|min:0',
-            'spans.*.components.ps_housing'    => 'nullable|integer|min:0',
+            'node_id'                      => 'required|string|max:100',
+            'node_name'                    => 'required|string|max:255',
+            'area_id'                      => 'required|exists:skycable_areas,id',
+            'region'                       => 'nullable|string|max:255',
+            'province'                     => 'nullable|string|max:255',
+            'city'                         => 'nullable|string|max:255',
+            'poles'                        => 'required|array|min:1',
+            'poles.*.pole_code'            => 'required|string|max:100',
+            'poles.*.latitude'             => 'nullable|numeric|between:-90,90',
+            'poles.*.longitude'            => 'nullable|numeric|between:-180,180',
+            'poles.*.barangay_name'        => 'nullable|string|max:255',
+            'spans'                        => 'nullable|array',
+            'spans.*.from_pole_code'       => 'required|string',
+            'spans.*.to_pole_code'         => 'required|string',
+            'spans.*.strand_length'        => 'nullable|numeric|min:0',
+            'spans.*.number_of_runs'       => 'nullable|integer|min:1',
+            'spans.*.components'           => 'nullable|array',
+            'spans.*.components.node'      => 'nullable|integer|min:0',
+            'spans.*.components.amplifier' => 'nullable|integer|min:0',
+            'spans.*.components.extender'  => 'nullable|integer|min:0',
+            'spans.*.components.tsc'       => 'nullable|integer|min:0',
+            'spans.*.components.powersupply' => 'nullable|integer|min:0',
+            'spans.*.components.ps_housing'  => 'nullable|integer|min:0',
         ]);
 
-        $node = SkycableNode::findOrFail($request->node_id);
+        // ── Find or create node by node_id string ────────────────────────────
+        $node = SkycableNode::firstOrCreate(
+            ['node_id' => $request->node_id, 'area_id' => $request->area_id],
+            [
+                'name'        => $request->node_name,
+                'status'      => 'pending',
+                'source_file' => 'asbuilt',
+            ]
+        );
 
         $result = DB::transaction(function () use ($request, $node) {
 
-            $createdPoles   = [];
-            $updatedPoles   = [];
-            $createdSpans   = [];
-            $updatedSpans   = [];
-            $errors         = [];
+            $createdPoles  = [];
+            $updatedPoles  = [];
+            $createdSpans  = [];
+            $updatedSpans  = [];
+            $errors        = [];
 
-            // pole_code → skycable_poles.id map for span lookup
-            $poleCodeToSkId = [];
+            $poleCodeToEntries  = [];
+            $usedSkycablePoleIds = [];
+            $importedCoordinates = [];
+            $barangayNames       = [];
 
             // ── 1. Upsert Poles ──────────────────────────────────────────────
             $maxSeq = SkycablePole::where('node_id', $node->id)->max('sequence') ?? 0;
 
             foreach ($request->poles as $idx => $poleData) {
                 $code = strtoupper(trim($poleData['pole_code']));
-                if (!$code) { $errors[] = "poles[{$idx}]: pole_code is empty"; continue; }
-
-                // Find or create in master poles table
-                $pole = Pole::firstOrCreate(
-                    ['pole_code' => $code],
-                    [
-                        'lat' => $poleData['latitude']  ?? null,
-                        'lng' => $poleData['longitude'] ?? null,
-                    ]
-                );
-
-                // Update GPS coordinates if now available and not already set
-                if ((!$pole->lat || !$pole->lng) && !empty($poleData['latitude'])) {
-                    $pole->update([
-                        'lat' => $poleData['latitude'],
-                        'lng' => $poleData['longitude'],
-                    ]);
+                if (! $code) {
+                    $errors[] = "poles[{$idx}]: pole_code is empty";
+                    continue;
                 }
 
-                if ($pole->wasRecentlyCreated) {
-                    $createdPoles[] = $code;
-                } else {
+                $lat = $this->normalizeCoordinate($poleData['latitude'] ?? null);
+                $lng = $this->normalizeCoordinate($poleData['longitude'] ?? null);
+
+                if (! empty($poleData['barangay_name'])) {
+                    $barangayNames[] = trim($poleData['barangay_name']);
+                }
+
+                $skycablePole = $this->matchExistingNodePole(
+                    $node->id, $code, $lat, $lng, $usedSkycablePoleIds
+                );
+
+                if ($skycablePole) {
+                    $pole = $this->preparePoleForNodeImport($skycablePole, $code, $lat, $lng);
+
+                    if ($skycablePole->pole_id !== $pole->id) {
+                        $skycablePole->update(['pole_id' => $pole->id]);
+                    }
+
                     $updatedPoles[] = $code;
+                } else {
+                    $pole = Pole::create([
+                        'pole_code' => $code,
+                        'lat'       => $lat,
+                        'lng'       => $lng,
+                    ]);
+
+                    $skycablePole = SkycablePole::create([
+                        'node_id'  => $node->id,
+                        'pole_id'  => $pole->id,
+                        'sequence' => ++$maxSeq,
+                    ]);
+
+                    $createdPoles[] = $code;
                 }
 
-                // Enroll in this node via skycable_poles junction table
-                $skycablePole = SkycablePole::firstOrCreate(
-                    ['node_id' => $node->id, 'pole_id' => $pole->id],
-                    ['sequence' => ++$maxSeq]
-                );
+                $skycablePole->setRelation('pole', $pole);
+                $usedSkycablePoleIds[] = $skycablePole->id;
 
-                $poleCodeToSkId[$code] = $skycablePole->id;
+                if ($lat !== null && $lng !== null) {
+                    $importedCoordinates[] = ['lat' => $lat, 'lng' => $lng];
+                }
+
+                $poleCodeToEntries[$code][] = [
+                    'id'           => $skycablePole->id,
+                    'latitude'     => $lat,
+                    'longitude'    => $lng,
+                    'source_index' => $idx,
+                ];
             }
 
             // ── 2. Upsert Spans + Summaries ───────────────────────────────────
@@ -143,18 +158,29 @@ class AsBuiltController extends Controller
                 $fromCode = strtoupper(trim($spanData['from_pole_code']));
                 $toCode   = strtoupper(trim($spanData['to_pole_code']));
 
-                $fromSkId = $poleCodeToSkId[$fromCode] ?? null;
-                $toSkId   = $poleCodeToSkId[$toCode]   ?? null;
+                $fromEntry = $this->resolveImportedPoleEntry($poleCodeToEntries, $fromCode, $spanData, 'from');
+                $toEntry   = $this->resolveImportedPoleEntry($poleCodeToEntries, $toCode,   $spanData, 'to');
 
-                if (!$fromSkId) { $errors[] = "spans[{$idx}]: from_pole_code '{$fromCode}' not found in poles list"; continue; }
-                if (!$toSkId)   { $errors[] = "spans[{$idx}]: to_pole_code '{$toCode}' not found in poles list"; continue; }
-                if ($fromSkId === $toSkId) { $errors[] = "spans[{$idx}]: from and to poles must be different"; continue; }
+                $fromSkId = $fromEntry['id'] ?? null;
+                $toSkId   = $toEntry['id']   ?? null;
+
+                if (! $fromSkId) {
+                    $errors[] = "spans[{$idx}]: from_pole_code '{$fromCode}' not found in poles list";
+                    continue;
+                }
+                if (! $toSkId) {
+                    $errors[] = "spans[{$idx}]: to_pole_code '{$toCode}' not found in poles list";
+                    continue;
+                }
+                if ($fromSkId === $toSkId) {
+                    $errors[] = "spans[{$idx}]: from and to poles must be different";
+                    continue;
+                }
 
                 $strandLength  = $spanData['strand_length']  ?? null;
                 $numberOfRuns  = $spanData['number_of_runs'] ?? 1;
                 $expectedCable = $strandLength ? round($strandLength * $numberOfRuns, 2) : 0;
 
-                // Idempotent: find or create by from+to within node
                 $span = SkycableSpan::firstOrCreate(
                     [
                         'node_id'      => $node->id,
@@ -178,25 +204,49 @@ class AsBuiltController extends Controller
                     $updatedSpans[] = "{$fromCode} → {$toCode}";
                 }
 
-                // Upsert flat span summary (all expected components + cable)
                 $comp = $spanData['components'] ?? [];
                 SkycableSpanSummary::updateOrCreate(
                     ['span_id' => $span->id],
                     [
-                        'node_id'              => $node->id,
-                        'expected_cable'       => $expectedCable,
-                        'expected_node'        => $comp['node']        ?? 0,
-                        'expected_amplifier'   => $comp['amplifier']   ?? 0,
-                        'expected_extender'    => $comp['extender']    ?? 0,
-                        'expected_tsc'         => $comp['tsc']         ?? 0,
+                        'node_id'            => $node->id,
+                        'expected_cable'     => $expectedCable,
+                        'expected_node'      => $comp['node']        ?? 0,
+                        'expected_amplifier' => $comp['amplifier']   ?? 0,
+                        'expected_extender'  => $comp['extender']    ?? 0,
+                        'expected_tsc'       => $comp['tsc']         ?? 0,
                         'expected_powersupply' => $comp['powersupply'] ?? 0,
                         'expected_ps_housing'  => $comp['ps_housing']  ?? 0,
                     ]
                 );
             }
 
-            // ── 3. Mark node as full_report ──────────────────────────────────
-            $node->update(['report_type' => 'full_report']);
+            // ── 3. Majority barangay from poles ───────────────────────────────
+            $majorityBarangay = collect($barangayNames)
+                ->countBy()
+                ->sortDesc()
+                ->keys()
+                ->first();
+
+            // ── 4. Update node metadata ───────────────────────────────────────
+            $nodeUpdate = [
+                'name'        => $request->node_name,
+                'report_type' => 'full_report',
+                'data_source' => 'json_import',
+                'source_file' => 'asbuilt',
+            ];
+
+            if ($request->filled('region'))   $nodeUpdate['region']   = $request->region;
+            if ($request->filled('province'))  $nodeUpdate['province'] = $request->province;
+            if ($request->filled('city'))      $nodeUpdate['city']     = $request->city;
+            if ($majorityBarangay)             $nodeUpdate['barangay_name'] = $majorityBarangay;
+
+            if (count($importedCoordinates) > 0) {
+                $nodeUpdate['lat'] = collect($importedCoordinates)->avg('lat');
+                $nodeUpdate['lng'] = collect($importedCoordinates)->avg('lng');
+            }
+
+            $node->update($nodeUpdate);
+            $this->clearSkycableMapCaches();
 
             AuditLog::record('asbuilt_import', $node, null, [
                 'poles_created' => count($createdPoles),
@@ -207,10 +257,16 @@ class AsBuiltController extends Controller
             ]);
 
             return [
-                'node'          => [
-                    'id'          => $node->id,
-                    'name'        => $node->name,
-                    'report_type' => 'full_report',
+                'node' => [
+                    'id'           => $node->id,
+                    'node_id'      => $node->node_id,
+                    'name'         => $node->name,
+                    'region'       => $node->region,
+                    'province'     => $node->province,
+                    'city'         => $node->city,
+                    'barangay_name' => $node->barangay_name,
+                    'report_type'  => 'full_report',
+                    'source_file'  => 'asbuilt',
                 ],
                 'poles_created' => $createdPoles,
                 'poles_updated' => $updatedPoles,
@@ -230,8 +286,6 @@ class AsBuiltController extends Controller
 
     /**
      * GET /asbuilt/sites
-     * List all areas from skycable_areas — these ARE the "sites" in AsBuilt IQ.
-     * (NCR, North Luzon, South Luzon, Visayas, Mindanao)
      */
     public function sites()
     {
@@ -249,7 +303,6 @@ class AsBuiltController extends Controller
 
     /**
      * GET /asbuilt/sites/{areaId}/nodes
-     * List all nodes under a skycable_area (area = "site" in AsBuilt IQ).
      */
     public function nodesBySite(int $areaId)
     {
@@ -261,25 +314,23 @@ class AsBuiltController extends Controller
             ->get()
             ->map(fn ($n) => [
                 'id'          => $n->id,
+                'node_id'     => $n->node_id,
                 'name'        => $n->name,
                 'full_label'  => $n->full_label,
                 'status'      => $n->status,
                 'report_type' => $n->report_type,
+                'source_file' => $n->source_file,
                 'pole_count'  => $n->pole_count,
             ]);
 
         return response()->json([
-            'site'  => [
-                'id'   => $area->id,
-                'name' => $area->name,
-            ],
+            'site'  => ['id' => $area->id, 'name' => $area->name],
             'nodes' => $nodes,
         ]);
     }
 
     /**
      * GET /asbuilt/node/{nodeId}
-     * Returns the current state of a node: all poles + spans + summaries.
      */
     public function node(int $nodeId)
     {
@@ -305,33 +356,137 @@ class AsBuiltController extends Controller
         ]);
 
         $spans = $node->spans->map(fn ($s) => [
-            'span_id'         => $s->id,
-            'from_pole_code'  => $s->fromPole?->pole?->pole_code,
-            'to_pole_code'    => $s->toPole?->pole?->pole_code,
-            'strand_length'   => $s->strand_length,
-            'number_of_runs'  => $s->number_of_runs,
-            'expected_cable'  => $s->summary?->expected_cable ?? 0,
-            'status'          => $s->status,
-            'components'      => [
+            'span_id'        => $s->id,
+            'from_pole_code' => $s->fromPole?->pole?->pole_code,
+            'to_pole_code'   => $s->toPole?->pole?->pole_code,
+            'strand_length'  => $s->strand_length,
+            'number_of_runs' => $s->number_of_runs,
+            'expected_cable' => $s->summary?->expected_cable ?? 0,
+            'status'         => $s->status,
+            'components'     => [
                 'node'        => $s->summary?->expected_node        ?? 0,
                 'amplifier'   => $s->summary?->expected_amplifier   ?? 0,
-                'extender'    => $s->summary?->expected_extender     ?? 0,
-                'tsc'         => $s->summary?->expected_tsc          ?? 0,
-                'powersupply' => $s->summary?->expected_powersupply  ?? 0,
-                'ps_housing'  => $s->summary?->expected_ps_housing   ?? 0,
+                'extender'    => $s->summary?->expected_extender    ?? 0,
+                'tsc'         => $s->summary?->expected_tsc         ?? 0,
+                'powersupply' => $s->summary?->expected_powersupply ?? 0,
+                'ps_housing'  => $s->summary?->expected_ps_housing  ?? 0,
             ],
         ]);
 
         return response()->json([
             'node' => [
                 'id'          => $node->id,
+                'node_id'     => $node->node_id,
                 'name'        => $node->name,
                 'area'        => $node->area?->name,
+                'region'      => $node->region,
+                'province'    => $node->province,
+                'city'        => $node->city,
+                'barangay'    => $node->barangay_name,
                 'report_type' => $node->report_type,
+                'source_file' => $node->source_file,
                 'status'      => $node->status,
             ],
             'poles' => $poles,
             'spans' => $spans,
         ]);
+    }
+
+    private function normalizeCoordinate(mixed $value): ?float
+    {
+        if ($value === null || $value === '') return null;
+        return round((float) $value, 7);
+    }
+
+    private function matchExistingNodePole(int $nodeId, string $code, ?float $lat, ?float $lng, array $usedSkycablePoleIds): ?SkycablePole
+    {
+        $existing = SkycablePole::with('pole')
+            ->where('node_id', $nodeId)
+            ->whereNotIn('id', $usedSkycablePoleIds ?: [0])
+            ->whereHas('pole', fn ($q) => $q->where('pole_code', $code))
+            ->orderBy('sequence')
+            ->get();
+
+        if ($existing->isEmpty()) return null;
+
+        return $existing->first(fn ($sp) => $this->poleMatchesCoordinates($sp->pole, $lat, $lng))
+            ?? $existing->first();
+    }
+
+    private function preparePoleForNodeImport(SkycablePole $skycablePole, string $code, ?float $lat, ?float $lng): Pole
+    {
+        $pole = $skycablePole->pole;
+
+        if (! $pole) {
+            return Pole::create(['pole_code' => $code, 'lat' => $lat, 'lng' => $lng]);
+        }
+
+        $isShared = SkycablePole::where('pole_id', $pole->id)
+            ->where('id', '!=', $skycablePole->id)
+            ->exists();
+
+        if ($isShared) {
+            return Pole::create(['pole_code' => $code, 'lat' => $lat, 'lng' => $lng]);
+        }
+
+        $updates = [];
+        if ($pole->pole_code !== $code) $updates['pole_code'] = $code;
+        if ($lat !== null && ! $this->coordinatesEqual($pole->lat, $lat)) $updates['lat'] = $lat;
+        if ($lng !== null && ! $this->coordinatesEqual($pole->lng, $lng)) $updates['lng'] = $lng;
+
+        if (! empty($updates)) $pole->update($updates);
+
+        return $pole->fresh();
+    }
+
+    private function poleMatchesCoordinates(?Pole $pole, ?float $lat, ?float $lng): bool
+    {
+        if (! $pole) return false;
+        if ($lat === null || $lng === null) return $pole->lat === null && $pole->lng === null;
+
+        return $this->coordinatesEqual($pole->lat, $lat) && $this->coordinatesEqual($pole->lng, $lng);
+    }
+
+    private function coordinatesEqual(mixed $stored, float $incoming): bool
+    {
+        if ($stored === null || $stored === '') return false;
+        return abs(round((float) $stored, 7) - $incoming) < 0.0000001;
+    }
+
+    private function resolveImportedPoleEntry(array $poleCodeToEntries, string $code, array $spanData, string $side): ?array
+    {
+        $entries = $poleCodeToEntries[$code] ?? [];
+        if (count($entries) === 0) return null;
+
+        $lat = $this->normalizeCoordinate(
+            $spanData["{$side}_latitude"] ?? $spanData["{$side}_pole_latitude"] ?? $spanData["{$side}_lat"] ?? null
+        );
+        $lng = $this->normalizeCoordinate(
+            $spanData["{$side}_longitude"] ?? $spanData["{$side}_pole_longitude"] ?? $spanData["{$side}_lng"] ?? null
+        );
+
+        if ($lat !== null && $lng !== null) {
+            $match = collect($entries)->first(
+                fn ($e) => $this->coordinatesEqual($e['latitude'], $lat) && $this->coordinatesEqual($e['longitude'], $lng)
+            );
+            if ($match) return $match;
+        }
+
+        $sourceIndex = $spanData["{$side}_pole_index"] ?? $spanData["{$side}_index"] ?? null;
+        if ($sourceIndex !== null) {
+            $match = collect($entries)->first(fn ($e) => $e['source_index'] === (int) $sourceIndex);
+            if ($match) return $match;
+            if (isset($entries[(int) $sourceIndex])) return $entries[(int) $sourceIndex];
+        }
+
+        return $entries[0];
+    }
+
+    private function clearSkycableMapCaches(): void
+    {
+        Cache::forget('skycable_all_poles');
+        Cache::forget('nodes_index_50_p1');
+        Cache::forget('nodes_index_100_p1');
+        Cache::forget('nodes_index_200_p1');
     }
 }

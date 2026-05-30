@@ -26,6 +26,7 @@ class TeardownImageController extends Controller
             'pole_code'      => 'required|string',
             'image_type'     => 'required|string|in:before,after,pole_tag,bunching',
             'span_id'        => 'nullable|integer',
+            'to_pole_id'     => 'nullable|integer',
             'pole_tag'       => 'nullable|string',
             'inventory_type' => 'required|string|in:skycable,globe',
             'image'          => 'required|image|max:10240', // 10MB max
@@ -42,15 +43,17 @@ class TeardownImageController extends Controller
         $imageType = $request->image_type;
 
         if ($imageType === 'bunching') {
-            // spans/{span_id}/{span_id}_bunching.jpg
-            $spanId     = $this->sanitizePath($request->span_id ?? 'unknown');
-            $folderPath = "spans/{$spanId}";
-            $fileName   = "{$spanId}_bunching.jpg";
+            // bunching/{node_id}/{from_pole_id}_to_{to_pole_id}/bunching.jpg
+            $nodeIdSlug   = $this->sanitizePath($request->node_id    ?? 'unknown');
+            $fromPoleSlug = $this->sanitizePath($request->pole_id    ?? 'unknown');
+            $toPoleSlug   = $this->sanitizePath($request->to_pole_id ?? 'unknown');
+            $folderPath   = "bunching/{$nodeIdSlug}/{$fromPoleSlug}_to_{$toPoleSlug}";
+            $fileName     = "bunching.jpg";
         } else {
-            // {area}/{node}/{pole_code}/{pole_id}_before.jpg  (or after / poletag)
+            // {area}/{node}/{pole_code}/{pole_code}_before.jpg  (or after / poletag)
             $typeSlug   = $imageType === 'pole_tag' ? 'poletag' : $imageType;
             $folderPath = "{$areaName}/{$nodeName}/{$poleCode}";
-            $fileName   = "{$poleId}_{$typeSlug}.jpg";
+            $fileName   = "{$poleCode}_{$typeSlug}.jpg";
         }
 
         $fullPath = "{$folderPath}/{$fileName}";

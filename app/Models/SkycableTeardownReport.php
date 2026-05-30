@@ -46,6 +46,8 @@ class SkycableTeardownReport extends Model
     public function span()           { return $this->belongsTo(SkycableSpan::class, 'span_id'); }
     public function team()           { return $this->belongsTo(Team::class); }
     public function lineman()        { return $this->belongsTo(User::class, 'lineman_id'); }
+    public function subconReviewer() { return $this->belongsTo(User::class, 'subcon_reviewed_by'); }
+    public function backendApprover() { return $this->belongsTo(User::class, 'backend_approved_by'); }
     public function slots()          { return $this->hasMany(SkycableTeardownReportSlot::class, 'teardown_report_id'); }
     public function photos()         { return $this->hasMany(SkycableTeardownPhoto::class, 'teardown_report_id'); }
 }

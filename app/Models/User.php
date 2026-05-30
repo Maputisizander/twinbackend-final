@@ -20,9 +20,12 @@ class User extends Authenticatable
         'current_gps_lat', 'current_gps_lng',
         'last_seen_at', 'last_login',
         'status', 'password_reset_required', 'temp_password_set_at',
+        'can_approve_delivery',
     ];
 
     protected $hidden = ['password', 'remember_token'];
+
+    protected $appends = ['name'];
 
     protected function casts(): array
     {
@@ -33,12 +36,18 @@ class User extends Authenticatable
             'last_login'              => 'datetime',
             'temp_password_set_at'    => 'datetime',
             'password_reset_required' => 'boolean',
+            'can_approve_delivery'    => 'boolean',
         ];
+    }
+
+    public function getNameAttribute(): string
+    {
+        return trim("{$this->first_name} {$this->last_name}");
     }
 
     public function getFullNameAttribute(): string
     {
-        return "{$this->first_name} {$this->last_name}";
+        return $this->name;
     }
 
     public function isOnline(): bool

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Skycable;
 
+use App\Http\Concerns\CachesSkycableResponses;
 use App\Http\Concerns\StoresPhotos;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
@@ -21,31 +22,47 @@ use Illuminate\Support\Str;
 
 class TeardownController extends Controller
 {
+    use CachesSkycableResponses;
     use StoresPhotos;
     public function index(Request $request)
     {
-        $perPage  = min((int) ($request->per_page ?? 50), 200);
-        $hasFilter = $request->hasAny(['span_id', 'node_id', 'team_id', 'status', 'date']);
+        $perPage  = min((int) ($request->per_page ?? 50), 500);
+        $user = $request->user();
+        $role = strtolower($user->role ?? '');
+        $isWarehouseOrAdmin = str_contains($role, 'admin') 
+            || str_contains($role, 'executive') 
+            || str_contains($role, 'warehouse')
+            || str_contains($role, 'exec');
 
-        // Only cache unfiltered dashboard calls (short TTL so live feed stays fresh)
-        if (! $hasFilter) {
-            $cacheKey = "teardowns_index_{$perPage}_p" . ($request->page ?? 1);
-            $result = Cache::remember($cacheKey, 45, function () use ($perPage, $request) {
-                return SkycableTeardownReport::with(['span.node', 'span.fromPole.pole', 'span.toPole.pole', 'span.summary', 'team', 'lineman', 'photos'])
-                    ->latest()
-                    ->paginate($perPage);
-            });
-            return response()->json($result);
-        }
+        // Use role-scoped cache key to prevent data mixing between different authorization levels
+        $cacheScope = 'teardowns.index.' . ($isWarehouseOrAdmin ? 'all' : ($user->subcontractor_id ? "sub_{$user->subcontractor_id}" : "team_{$user->team_id}"));
 
-        $query = SkycableTeardownReport::with(['span.node', 'span.fromPole.pole', 'span.toPole.pole', 'span.summary', 'team', 'lineman', 'photos'])
-            ->when($request->span_id, fn ($q) => $q->where('span_id', $request->span_id))
-            ->when($request->node_id, fn ($q) => $q->whereHas('span', fn ($sq) => $sq->where('node_id', $request->node_id)))
-            ->when($request->team_id, fn ($q) => $q->where('team_id', $request->team_id))
-            ->when($request->status, fn ($q) => $q->where('status', $request->status))
-            ->when($request->date, fn ($q) => $q->whereDate('start_time', $request->date));
+        $hasFilter = $request->hasAny(['span_id', 'node_id', 'team_id', 'status', 'date', 'end_time']);
 
-        return response()->json($query->latest()->paginate($perPage));
+        $fetch = function () use ($request, $perPage, $user, $isWarehouseOrAdmin) {
+            return SkycableTeardownReport::with(['span.node', 'span.fromPole.pole', 'span.toPole.pole', 'span.summary', 'team.subcontractor', 'lineman', 'subconReviewer', 'backendApprover', 'photos'])
+                ->when(!$isWarehouseOrAdmin && $user->subcontractor_id, function ($q) use ($user) {
+                    $q->whereHas('team', function ($sq) use ($user) {
+                        $sq->where('subcontractor_id', $user->subcontractor_id);
+                    });
+                })
+                ->when(!$isWarehouseOrAdmin && !$user->subcontractor_id && $user->team_id, function ($q) use ($user) {
+                    $q->where('team_id', $user->team_id);
+                })
+                ->when($request->span_id, fn ($q) => $q->where('span_id', $request->span_id))
+                ->when($request->node_id, fn ($q) => $q->whereHas('span', fn ($sq) => $sq->where('node_id', $request->node_id)))
+                ->when($request->team_id, fn ($q) => $q->where('team_id', $request->team_id))
+                ->when($request->status, fn ($q) => $q->where('status', $request->status))
+                ->when($request->date, fn ($q) => $q->where(function ($query) use ($request) {
+                    $query->whereDate('start_time', $request->date)
+                        ->orWhereDate('end_time', $request->date);
+                }))
+                ->when($request->end_time, fn ($q) => $q->whereDate('end_time', $request->end_time))
+                ->latest()
+                ->paginate($perPage);
+        };
+
+        return $this->skycableCachedJson($cacheScope, $hasFilter ? 45 : 60, $fetch, $request);
     }
 
     public function start(Request $request)
@@ -67,6 +84,7 @@ class TeardownController extends Controller
 
         $report = SkycableTeardownReport::create($data);
         AuditLog::record('create', $report, null, $report->toArray());
+        $this->bumpSkycableCacheVersion();
 
         return response()->json($report, 201);
     }
@@ -146,12 +164,12 @@ class TeardownController extends Controller
                     }
 
                     // Build flat path
-                    // Pole:    {area}/{node}/{pole_code}/{pole_id}_{type}.jpg
+                    // Pole:    {area}/{node}/{pole_code}/{pole_code}_{type}.jpg
                     // Bunching: spans/{span_id}/{span_id}_bunching.jpg
                     if ($isBunching) {
                         $filePath = "spans/{$spanId}/{$spanId}_bunching.jpg";
                     } else {
-                        $filePath = "{$areaName}/{$nodeName}/{$poleCode}/{$poleId}_{$typeSlug}.jpg";
+                        $filePath = "{$areaName}/{$nodeName}/{$poleCode}/{$poleCode}_{$typeSlug}.jpg";
                     }
 
                     $path = $this->storePhoto($request->file($field), 'teardown', 1280, $filePath);
@@ -194,49 +212,113 @@ class TeardownController extends Controller
             $data['status'] = 'submitted';
             $old = $report->toArray();
             $report->update($data);
+            $this->completeSpanFromTeardown($span, $request->user()->id, $data);
             AuditLog::record('update', $report, $old, $report->toArray());
         });
+
+        $this->bumpSkycableCacheVersion();
 
         return response()->json($report->fresh()->load(['slots', 'photos']));
     }
 
     public function show(SkycableTeardownReport $report)
     {
-        $report->load(['span.fromPole.pole', 'span.toPole.pole', 'span.summary', 'team', 'lineman', 'slots', 'photos']);
+        return $this->skycableCachedJson("teardowns.show.{$report->id}", 120, function () use ($report) {
+            $report->load(['span.node', 'span.fromPole.pole', 'span.toPole.pole', 'span.summary', 'team', 'lineman', 'slots', 'photos']);
 
-        // If SkycableTeardownPhoto is empty, fall back to PoleTeardownImage records
-        if ($report->photos->isEmpty()) {
-            $fromPoleCode = $report->span?->fromPole?->pole?->pole_code;
-            $toPoleCode   = $report->span?->toPole?->pole?->pole_code;
+            // If SkycableTeardownPhoto is empty, fall back to PoleTeardownImage records
+            if ($report->photos->isEmpty()) {
+                $fromPoleCode = $report->span?->fromPole?->pole?->pole_code;
+                $toPoleCode   = $report->span?->toPole?->pole?->pole_code;
 
-            $typeMap = ['before' => 'before', 'after' => 'after', 'poletag' => 'pole_tag', 'pole_tag' => 'pole_tag', 'bunching' => 'bunching'];
+                $typeMap = ['before' => 'before', 'after' => 'after', 'poletag' => 'pole_tag', 'pole_tag' => 'pole_tag', 'bunching' => 'bunching'];
 
-            $fallback = \App\Models\PoleTeardownImage::where('report_id', $report->id)
-                ->get()
-                ->map(function ($img) use ($fromPoleCode, $toPoleCode, $typeMap) {
-                    $base   = $typeMap[$img->image_type] ?? $img->image_type;
-                    $prefix = match (true) {
-                        $img->pole_code === $toPoleCode   => 'to_',
-                        $img->pole_code === $fromPoleCode => 'from_',
-                        default                           => 'from_',
-                    };
-                    return [
-                        'id'                 => $img->id,
-                        'teardown_report_id' => $img->report_id,
-                        'photo_type'         => $base === 'bunching' ? 'bunching' : $prefix . $base,
-                        'image_path'         => $img->file_path,
-                    ];
-                });
+                $fallback = \App\Models\PoleTeardownImage::where('report_id', $report->id)
+                    ->where('inventory_type', 'skycable')
+                    ->where(function ($query) use ($fromPoleCode, $toPoleCode) {
+                        $query->whereIn('pole_code', array_filter([$fromPoleCode, $toPoleCode]))
+                              ->orWhere('image_type', 'bunching');
+                    })
+                    ->get()
+                    ->map(function ($img) use ($fromPoleCode, $toPoleCode, $typeMap) {
+                        $base   = $typeMap[$img->image_type] ?? $img->image_type;
+                        $prefix = match (true) {
+                            $img->pole_code === $toPoleCode   => 'to_',
+                            $img->pole_code === $fromPoleCode => 'from_',
+                            default                           => 'from_',
+                        };
+                        return [
+                            'id'                 => $img->id,
+                            'teardown_report_id' => $img->report_id,
+                            'photo_type'         => $base === 'bunching' ? 'bunching' : $prefix . $base,
+                            'image_path'         => $img->file_path,
+                        ];
+                    });
 
-            $report->setRelation('photos', $fallback);
-        }
+                $report->setRelation('photos', $fallback);
+            }
 
-        return response()->json($report);
+            return $report;
+        });
     }
 
     private function sanitizePath($name)
     {
         return preg_replace('/[^A-Za-z0-9_\- ]/', '', $name);
+    }
+
+    private function completeSpanFromTeardown(?SkycableSpan $span, int $userId, array $data): void
+    {
+        if (! $span) {
+            return;
+        }
+
+        $span->loadMissing(['fromPole.pole', 'toPole.pole']);
+
+        $actualCable = $data['actual_cable'] ?? $span->actual_cable ?? 0;
+
+        $span->update([
+            'status' => 'completed',
+            'completed_at' => now(),
+            'actual_cable' => $actualCable,
+        ]);
+
+        SkycableSpanSummary::updateOrCreate(
+            ['span_id' => $span->id],
+            [
+                'node_id' => $span->node_id,
+                'actual_cable' => $actualCable,
+                'actual_node' => $data['nodes_collected'] ?? 0,
+                'actual_amplifier' => $data['amplifiers_collected'] ?? 0,
+                'actual_extender' => $data['extenders_collected'] ?? 0,
+                'actual_tsc' => $data['tsc_collected'] ?? 0,
+                'actual_powersupply' => $data['powersupply_collected'] ?? 0,
+                'actual_ps_housing' => $data['ps_housing_collected'] ?? 0,
+                'updated_by' => $userId,
+            ]
+        );
+
+        foreach (array_filter([$span->fromPole, $span->toPole]) as $skycablePole) {
+            if (! $skycablePole->pole) {
+                continue;
+            }
+
+            $hasPendingSpan = SkycableSpan::where(function ($query) use ($skycablePole) {
+                $query->where('from_pole_id', $skycablePole->id)
+                    ->orWhere('to_pole_id', $skycablePole->id);
+            })->whereNotIn('status', ['completed', 'superseded', 'cancelled'])->exists();
+
+            if ($hasPendingSpan) {
+                $skycablePole->pole->update(['skycable_status' => 'in_progress']);
+                continue;
+            }
+
+            $skycablePole->pole->update([
+                'skycable_status' => 'cleared',
+                'skycable_cleared_at' => now(),
+            ]);
+            $skycablePole->update(['cleared_at' => now()]);
+        }
     }
 
     public function storeDirect(Request $request)
@@ -346,13 +428,13 @@ class TeardownController extends Controller
                     $filePath = "spans/{$dSpanId}/{$dSpanId}_bunching.jpg";
                 } elseif (str_contains($field, 'pole_tag')) {
                     $typeSlug = 'poletag';
-                    $filePath = "{$dAreaName}/{$dNodeName}/{$poleCode}/{$poleId}_poletag.jpg";
+                    $filePath = "{$dAreaName}/{$dNodeName}/{$poleCode}/{$poleCode}_poletag.jpg";
                 } elseif (str_contains($field, 'after')) {
                     $typeSlug = 'after';
-                    $filePath = "{$dAreaName}/{$dNodeName}/{$poleCode}/{$poleId}_after.jpg";
+                    $filePath = "{$dAreaName}/{$dNodeName}/{$poleCode}/{$poleCode}_after.jpg";
                 } else {
                     $typeSlug = 'before';
-                    $filePath = "{$dAreaName}/{$dNodeName}/{$poleCode}/{$poleId}_before.jpg";
+                    $filePath = "{$dAreaName}/{$dNodeName}/{$poleCode}/{$poleCode}_before.jpg";
                 }
 
                 $path = $this->storePhoto($request->file($field), 'teardown', 1280, $filePath);
@@ -448,6 +530,8 @@ class TeardownController extends Controller
             return $report;
         });
 
+        $this->bumpSkycableCacheVersion();
+
         return response()->json($report->fresh()->load(['span.fromPole.pole', 'span.toPole.pole', 'span.summary', 'team', 'lineman', 'slots', 'photos']), 201);
     }
 
@@ -478,6 +562,7 @@ class TeardownController extends Controller
         }
 
         AuditLog::record('update', $report, $old, $report->toArray());
+        $this->bumpSkycableCacheVersion();
 
         return response()->json($report->fresh());
     }
@@ -561,6 +646,7 @@ class TeardownController extends Controller
         }
 
         AuditLog::record('update', $report, $old, $report->toArray());
+        $this->bumpSkycableCacheVersion();
 
         return response()->json($report->fresh());
     }

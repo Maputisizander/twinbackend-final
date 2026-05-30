@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Skycable;
 
+use App\Http\Concerns\CachesSkycableResponses;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Pole;
@@ -13,13 +14,16 @@ use Illuminate\Support\Facades\DB;
 
 class SpanController extends Controller
 {
+    use CachesSkycableResponses;
+
     public function index(Request $request)
     {
-        $query = SkycableSpan::with(['node', 'fromPole.pole', 'toPole.pole', 'summary'])
-            ->when($request->node_id, fn ($q) => $q->where('node_id', $request->node_id))
-            ->when($request->status,  fn ($q) => $q->where('status', $request->status));
-
-        return response()->json($query->get());
+        return $this->skycableCachedJson('spans.index', 120, function () use ($request) {
+            return SkycableSpan::with(['node', 'fromPole.pole', 'toPole.pole', 'summary'])
+                ->when($request->node_id, fn ($q) => $q->where('node_id', $request->node_id))
+                ->when($request->status,  fn ($q) => $q->where('status', $request->status))
+                ->get();
+        }, $request);
     }
 
     public function store(Request $request)
@@ -59,6 +63,7 @@ class SpanController extends Controller
         $poleChanges = $this->refreshPoleStatuses($span);
 
         AuditLog::record('created', $span, null, array_merge($span->toArray(), ['pole_status_changes' => $poleChanges]));
+        $this->bumpSkycableCacheVersion();
 
         return response()->json([
             'span'               => $span->load(['fromPole.pole', 'toPole.pole', 'summary']),
@@ -68,7 +73,9 @@ class SpanController extends Controller
 
     public function show(SkycableSpan $span)
     {
-        return response()->json($span->load(['node', 'fromPole.pole', 'toPole.pole', 'summary', 'teardownReports']));
+        return $this->skycableCachedJson("spans.show.{$span->id}", 120, function () use ($span) {
+            return $span->load(['node', 'fromPole.pole', 'toPole.pole', 'summary', 'teardownReports']);
+        });
     }
 
     public function update(Request $request, SkycableSpan $span)
@@ -99,6 +106,7 @@ class SpanController extends Controller
         $this->syncComponents($span, $data);
 
         AuditLog::record('updated', $span, $old, $span->toArray());
+        $this->bumpSkycableCacheVersion();
 
         return response()->json($span->load(['fromPole.pole', 'toPole.pole', 'summary']));
     }
@@ -107,6 +115,8 @@ class SpanController extends Controller
     {
         AuditLog::record('deleted', $span, $span->toArray(), null);
         $span->delete();
+        $this->bumpSkycableCacheVersion();
+
         return response()->json(['message' => 'Span deleted.']);
     }
 
@@ -228,6 +238,8 @@ class SpanController extends Controller
             $this->refreshPoleStatuses($result['span_b']),
         );
 
+        $this->bumpSkycableCacheVersion();
+
         return response()->json(array_merge($result, ['pole_status_changes' => $poleChanges]), 201);
     }
 
@@ -255,6 +267,7 @@ class SpanController extends Controller
         );
 
         AuditLog::record('updated', $span, null, ['components_updated' => true]);
+        $this->bumpSkycableCacheVersion();
 
         return response()->json($span->load('summary'));
     }

@@ -20,7 +20,8 @@ class PoleReport extends Model
         'longitude' => 'float',
     ];
 
-    public function pole()          { return $this->belongsTo(Pole::class); }
-    public function node()          { return $this->belongsTo(SkycableNode::class, 'node_id'); }
-    public function submittedBy()   { return $this->belongsTo(User::class, 'submitted_by'); }
+    public function pole()     { return $this->belongsTo(Pole::class); }
+    public function node()     { return $this->belongsTo(SkycableNode::class, 'node_id'); }
+    public function submitter(){ return $this->belongsTo(User::class, 'submitted_by'); }
+    public function photos()   { return $this->hasMany(\App\Models\PoleTeardownImage::class, 'report_id'); }
 }

@@ -10,7 +10,7 @@ class SkycableNode extends Model
     use SoftDeletes;
 
     protected $fillable = [
-        'area_id', 'site_id', 'barangay_code', 'subcontractor_id', 'team_id',
+        'area_id', 'node_id', 'barangay_code', 'subcontractor_id', 'team_id',
         'name', 'label', 'full_label', 'status', 'report_type', 'data_source', 'source_file',
         'date_start', 'due_date', 'date_finished',
         'expected_cable', 'actual_cable', 'progress_percentage',
@@ -65,7 +65,7 @@ class SkycableNode extends Model
     }
 
     public function area()        { return $this->belongsTo(SkycableArea::class, 'area_id'); }
-    public function site()        { return $this->belongsTo(SkycableSite::class, 'site_id'); }
+    public function site()        { return $this->belongsTo(SkycableSite::class, 'node_id', 'id'); }
     public function barangay()    { return $this->belongsTo(PsgcBarangay::class, 'barangay_code', 'code'); }
     public function subcontractor() { return $this->belongsTo(Subcontractor::class); }
     public function team()        { return $this->belongsTo(Team::class); }
