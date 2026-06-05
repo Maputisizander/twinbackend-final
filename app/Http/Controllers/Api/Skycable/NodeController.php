@@ -110,6 +110,7 @@ class NodeController extends Controller
             $node->loadSum('spanSummaries', 'expected_powersupply');
             $node->loadSum('spanSummaries', 'expected_ps_housing');
 
+            $node->loadSum('spanSummaries', 'actual_cable');
             $node->loadSum('spanSummaries', 'actual_node');
             $node->loadSum('spanSummaries', 'actual_amplifier');
             $node->loadSum('spanSummaries', 'actual_extender');

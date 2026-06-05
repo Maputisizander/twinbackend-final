@@ -247,7 +247,9 @@
         </nav>
 
         <div class="flex items-center gap-3">
-
+          <a href="/login" class="hidden sm:inline-flex items-center rounded-full bg-[#0A5C3B] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#0c6a43] shadow-[0_12px_26px_rgba(10,92,59,0.16)]">
+            Login
+          </a>
 
           <button id="menu-btn" class="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-[#0A5C3B] lg:hidden" aria-label="Toggle menu">
             <svg id="menu-open" width="20" height="20" viewBox="0 0 24 24" fill="none">

@@ -59,6 +59,22 @@ class PoleTeardownLogController extends Controller
             $log = SkycablePoleTeardownLog::create($data);
         }
 
+        // When a lineman STARTS a pole (started_at set for first time), auto-assign
+        // the next teardown sequence so we know the order poles were touched.
+        if (! empty($data['started_at']) && ! empty($data['skycable_pole_id'])) {
+            $sp = SkycablePole::find($data['skycable_pole_id']);
+            if ($sp && ! $sp->date_start) {
+                // Assign next sequence number for this node's teardown order
+                $nextSeq = SkycablePole::where('node_id', $sp->node_id)
+                    ->whereNotNull('date_start')
+                    ->max('sequence') ?? 0;
+                $sp->update([
+                    'date_start' => $data['started_at'],
+                    'sequence'   => $nextSeq + 1,
+                ]);
+            }
+        }
+
         $this->bumpSkycableCacheVersion();
 
         return response()->json($log->fresh(), $log->wasRecentlyCreated ? 201 : 200);

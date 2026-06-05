@@ -6,7 +6,19 @@ Route::get('/', function () {
     return view('welcome');
 });
 
+// Admin-only monitoring dashboard — requires valid Sanctum token with telcovantage role
 Route::get('/apiconsumption', function () {
+    $token = request()->bearerToken() ?? request()->cookie('token');
+    if (! $token) {
+        // Show login prompt if accessed from browser with no token
+        return response('
+            <html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1117;color:#fff">
+            <div style="text-align:center">
+              <p style="font-size:14px;color:#64748b;margin-bottom:16px">Admin access required</p>
+              <p style="font-size:12px;color:#475569">Open this page from the admin dashboard.</p>
+            </div></body></html>
+        ', 401);
+    }
     return view('apiconsumption');
 });
 

@@ -12,10 +12,12 @@ use App\Http\Controllers\Api;
 // Single health-check endpoint.
 Route::get('/ping', fn () => response()->json(['status' => 'ok', 'version' => 'v1']));
 
-// ── API monitoring (no auth — internal use) ───────────────────────────────────
-Route::get('/apistatus',              [Api\ApiStatusController::class, 'status']);
-Route::get('/apiconsumption',         [Api\ApiStatusController::class, 'consumption']);
-Route::delete('/apiconsumption/reset',[Api\ApiStatusController::class, 'reset']);
+// ── API monitoring — admin only ───────────────────────────────────────────────
+Route::get('/apistatus', [Api\ApiStatusController::class, 'status']); // public health check
+Route::middleware(['auth:sanctum', 'company:telcovantage'])->group(function () {
+    Route::get('/apiconsumption',          [Api\ApiStatusController::class, 'consumption']);
+    Route::delete('/apiconsumption/reset', [Api\ApiStatusController::class, 'reset']);
+});
 
 // ── Public file serving (no auth — images embedded in reports) ────────────────
 Route::get('/files/{path}', function (string $path) {
@@ -51,6 +53,9 @@ Route::middleware(['asbuilt.key'])->prefix('asbuilt')->group(function () {
 
     // Import (raw JSON body or .json file upload)
     Route::post('import',                  [Api\Skycable\AsBuiltController::class, 'import']);
+
+    // Sequence-first import — spans use from_sequence/to_sequence, no pole_code disambiguation needed
+    Route::post('import-by-sequence',      [Api\Skycable\AsBuiltController::class, 'importBySequence']);
 
     // Read back node state after import
     Route::get('node/{nodeId}',            [Api\Skycable\AsBuiltController::class, 'node']);

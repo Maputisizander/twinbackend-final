@@ -31,7 +31,28 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $this->autoSelectCacheDriver();
         $this->registerSkycableCacheInvalidation();
+    }
+
+    /**
+     * Auto-detect best available cache driver.
+     *
+     * Priority: redis → database → file
+     *
+     * If CACHE_STORE=redis but Redis is unreachable (e.g. Hostinger shared
+     * hosting), silently downgrade to database so the app never crashes.
+     */
+    private function autoSelectCacheDriver(): void
+    {
+        if (config('cache.default') !== 'redis') return;
+
+        try {
+            \Illuminate\Support\Facades\Redis::connection('cache')->ping();
+        } catch (\Throwable) {
+            // Redis unavailable — downgrade to database cache automatically
+            config(['cache.default' => 'database']);
+        }
     }
 
     private function registerSkycableCacheInvalidation(): void

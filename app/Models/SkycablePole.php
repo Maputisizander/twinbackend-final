@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class SkycablePole extends Model
 {
-    protected $fillable = ['node_id', 'pole_id', 'sequence', 'date_start', 'cleared_at', 'status', 'duration'];
+    protected $fillable = ['node_id', 'pole_id', 'sequence', 'pole_index', 'date_start', 'cleared_at', 'status', 'duration'];
 
     protected $casts = [
         'date_start' => 'datetime',

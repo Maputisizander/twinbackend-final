@@ -1,12 +1,8 @@
-# AsBuilt IQ — API Documentation
+# AsBuilt IQ + Polemaster — API Documentation
 
 **Version:** v1  
 **Backend:** TwinBackend (Laravel 11)  
-**Base URL (online — for employees):** `https://quack-useable-thesaurus.ngrok-free.dev/api/v1`  
-**Base URL (local Wi-Fi — same network only):** `http://192.168.1.17:8080/api/v1`
-
-> **Employees posting from outside the office must use the ngrok URL.**  
-> Local IP only works when the device is on the same Wi-Fi as the backend server.
+**Base URL:** `https://purple-mink-495054.hostingersite.com/api/v1`
 
 ---
 
@@ -16,14 +12,14 @@ Set this once in your app config:
 
 ```js
 // ✅ Online — use this for employees posting remotely (ngrok static domain)
-const BASE_URL = 'https://quack-useable-thesaurus.ngrok-free.dev/api/v1'
+const BASE_URL = 'https://purple-mink-495054.hostingersite.com/api/v1'
 
 // Local Wi-Fi only — use this when device is on the same network as the server
 // const BASE_URL = 'http://192.168.1.17:8080/api/v1'
 ```
 
 All endpoint paths in this document are relative to `BASE_URL`.  
-Example: `GET /asbuilt/sites` → `GET https://quack-useable-thesaurus.ngrok-free.dev/api/v1/asbuilt/sites`
+Example: `GET /asbuilt/sites` → `GET https://purple-mink-495054.hostingersite.com//api/v1/asbuilt/sites`
 
 ---
 
@@ -243,16 +239,23 @@ If the `node_id` already exists inside the selected `area_id`, the backend updat
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `pole_code` | string | ✅ | Stored UPPERCASE. e.g. `"PL-001"` |
+| `pole_index` | integer | ⭐ **Strongly recommended** | **1-based sequential number for this pole within the node.** Saved to `skycable_poles.sequence`. Node-scoped — the same physical pole can have a different `pole_index` in different nodes. Used by spans to pinpoint exactly which physical pole is the `from` or `to` endpoint. Prevents wrong spanning when two poles share the same `pole_code`. e.g. `1`, `2`, `3` … |
 | `latitude` | decimal | ❌ | −90 to 90 |
 | `longitude` | decimal | ❌ | −180 to 180 |
 | `barangay_name` | string | ❌ | Per-pole barangay. The node's `barangay_name` is auto-set to the most frequent value across all poles |
+
+> **Always include `pole_index`.** Even when all `pole_code` values are unique, providing `pole_index` on every pole and referencing it in spans guarantees that the backend creates each span between exactly the two poles you intended — no ambiguity, no wrong connections.
+
+---
 
 ### Span Fields (`spans[]`)
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `from_pole_code` | string | ✅ | Must match a `pole_code` in the `poles` array |
-| `to_pole_code` | string | ✅ | Must match a `pole_code` in the `poles` array. Must be different from `from_pole_code` |
+| `from_pole_code` | string | ✅ | `pole_code` of the starting pole |
+| `to_pole_code` | string | ✅ | `pole_code` of the ending pole. Must differ from `from_pole_code` |
+| `from_pole_index` | integer | ⭐ **Strongly recommended** | `pole_index` of the starting pole. Takes priority over `pole_code` matching. Use this to lock the span to the exact pole you mean |
+| `to_pole_index` | integer | ⭐ **Strongly recommended** | `pole_index` of the ending pole |
 | `strand_length` | decimal | ❌ | Length in meters. e.g. `50.5` |
 | `number_of_runs` | integer | ❌ | Minimum 1. Default: `1`. `expected_cable = strand_length × number_of_runs` |
 | `components` | object | ❌ | Equipment counts. All default to `0` if omitted |
@@ -265,9 +268,48 @@ If the `node_id` already exists inside the selected `area_id`, the backend updat
 
 > `expected_cable` is auto-computed: `strand_length × number_of_runs` and saved to `skycable_span_summaries.expected_cable`.
 
-### Disambiguation Fields for Spans (optional — used when pole codes repeat)
+---
 
-If the same `pole_code` appears more than once in the `poles` array (duplicate pole codes at different GPS coordinates), you can add coordinate hints or index hints to tell the backend which physical pole to use for `from` and `to`.
+### How `pole_index` Prevents Wrong Spanning
+
+Without `pole_index`, the backend matches poles by `pole_code` string only. If two poles share the same `pole_code` (a common occurrence when importing from field surveys), the backend picks the **first occurrence** — which may not be the pole you intended. This causes spans to connect the wrong physical poles.
+
+**With `pole_index`:** assign a unique 1-based integer to every pole, then reference those integers in your span definitions. The backend resolves the pole by index first, ignoring duplicate codes entirely.
+
+```
+poles:
+  pole_index: 1  →  PL-001  (lat 14.5397, lng 121.1092)
+  pole_index: 2  →  PL-001  (lat 14.5401, lng 121.1098)  ← same code, different location!
+  pole_index: 3  →  PL-002  (lat 14.5407, lng 121.1103)
+
+spans:
+  from_pole_index: 1 → to_pole_index: 2   ✅ connects the two PL-001 poles correctly
+  from_pole_index: 2 → to_pole_index: 3   ✅ connects second PL-001 to PL-002 correctly
+
+Without pole_index:
+  from_pole_code: "PL-001" → to_pole_code: "PL-001"  ❌ same code, backend can't tell which is which
+```
+
+---
+
+### Pole Resolution Priority (backend)
+
+The backend resolves which physical pole a span endpoint refers to using this priority order:
+
+1. **GPS coordinate match** — if `from_lat`/`from_lng` or `to_lat`/`to_lng` are provided on the span, the pole whose coordinates match is used
+2. **`pole_index` match** — if `from_pole_index` / `to_pole_index` is provided, the pole whose `pole_index` field equals that value is used ✅ **most reliable when GPS is unavailable**
+3. **Array-position fallback** — if no `pole_index` field was set on the pole, the value is treated as a 0-based array position
+4. **First occurrence** — final fallback: the first pole in the `poles` array whose `pole_code` matches ⚠️ may connect wrong poles if codes repeat
+
+**`pole_index` is also saved to `skycable_poles.sequence`.** If you provide `pole_index` on a pole, that value becomes its sequence number in the node. If omitted, the backend auto-increments from the highest existing sequence.
+
+**Always include `pole_index` on every pole and `from_pole_index`/`to_pole_index` on every span for predictable, correct spanning.**
+
+---
+
+### Disambiguation Fields for Spans (alternative — GPS coordinate hints)
+
+If `pole_index` is not available, GPS coordinate hints can also disambiguate poles.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -275,10 +317,8 @@ If the same `pole_code` appears more than once in the `poles` array (duplicate p
 | `from_longitude` / `from_pole_longitude` / `from_lng` | decimal | GPS longitude of the from-pole to match |
 | `to_latitude` / `to_pole_latitude` / `to_lat` | decimal | GPS latitude of the to-pole to match |
 | `to_longitude` / `to_pole_longitude` / `to_lng` | decimal | GPS longitude of the to-pole to match |
-| `from_pole_index` / `from_index` | integer | Zero-based index of the from-pole in the `poles` array |
-| `to_pole_index` / `to_index` | integer | Zero-based index of the to-pole in the `poles` array |
 
-The backend resolves in priority: **coordinate match → index match → first occurrence**.
+> Prefer `pole_index` over coordinate hints. GPS coordinates can have slight variations between devices; `pole_index` is always exact.
 
 ---
 
@@ -294,18 +334,21 @@ The backend resolves in priority: **coordinate match → index match → first o
   "city":      "STA. ROSA",
   "poles": [
     {
+      "pole_index":    1,
       "pole_code":     "PL-001",
       "latitude":      14.539770,
       "longitude":     121.109219,
       "barangay_name": "Balibago"
     },
     {
+      "pole_index":    2,
       "pole_code":     "PL-002",
       "latitude":      14.540100,
       "longitude":     121.109800,
       "barangay_name": "Balibago"
     },
     {
+      "pole_index":    3,
       "pole_code":     "PL-003",
       "latitude":      14.540750,
       "longitude":     121.110300,
@@ -314,10 +357,12 @@ The backend resolves in priority: **coordinate match → index match → first o
   ],
   "spans": [
     {
-      "from_pole_code": "PL-001",
-      "to_pole_code":   "PL-002",
-      "strand_length":  50.5,
-      "number_of_runs": 1,
+      "from_pole_code":  "PL-001",
+      "to_pole_code":    "PL-002",
+      "from_pole_index": 1,
+      "to_pole_index":   2,
+      "strand_length":   50.5,
+      "number_of_runs":  1,
       "components": {
         "node":        2,
         "amplifier":   1,
@@ -328,10 +373,12 @@ The backend resolves in priority: **coordinate match → index match → first o
       }
     },
     {
-      "from_pole_code": "PL-002",
-      "to_pole_code":   "PL-003",
-      "strand_length":  45.0,
-      "number_of_runs": 2,
+      "from_pole_code":  "PL-002",
+      "to_pole_code":    "PL-003",
+      "from_pole_index": 2,
+      "to_pole_index":   3,
+      "strand_length":   45.0,
+      "number_of_runs":  2,
       "components": {
         "node":        1,
         "amplifier":   0,
@@ -656,7 +703,8 @@ const payload = {
   province: manualNode?.province || selectedArea.province || '',
   city:     manualNode?.city     || selectedArea.city     || '',
 
-  poles: uploadedPoles.map(pole => ({
+  poles: uploadedPoles.map((pole, i) => ({
+    pole_index:    pole.pole_index ?? (i + 1),   // 1-based; always include this
     pole_code:     pole.pole_code,
     latitude:      pole.latitude  ?? null,
     longitude:     pole.longitude ?? null,
@@ -664,10 +712,12 @@ const payload = {
   })),
 
   spans: uploadedSpans.map(span => ({
-    from_pole_code: span.from_pole_code,
-    to_pole_code:   span.to_pole_code,
-    strand_length:  span.strand_length  ?? null,
-    number_of_runs: span.number_of_runs ?? 1,
+    from_pole_code:  span.from_pole_code,
+    to_pole_code:    span.to_pole_code,
+    from_pole_index: span.from_pole_index ?? null,  // always include — prevents wrong spanning
+    to_pole_index:   span.to_pole_index   ?? null,
+    strand_length:   span.strand_length  ?? null,
+    number_of_runs:  span.number_of_runs ?? 1,
     components: {
       node:        span.components?.node        ?? 0,
       amplifier:   span.components?.amplifier   ?? 0,
@@ -757,8 +807,88 @@ displaySpans(nodeState.spans)
 |--------|----------|-------------|
 | `GET` | `/asbuilt/sites` | List all areas |
 | `GET` | `/asbuilt/sites/{areaId}/nodes` | List nodes under an area |
-| `POST` | `/asbuilt/import` | Bulk import — JSON body or `.json` file upload |
+| `POST` | `/asbuilt/import` | Bulk import — JSON body or `.json` file upload (pole_code based) |
+| `POST` | `/asbuilt/import-by-sequence` | **Sequence-first import** — spans use `from_sequence`/`to_sequence`, no disambiguation needed |
 | `GET` | `/asbuilt/node/{nodeId}` | Verify node state after import |
+
+---
+
+### 6. Sequence-First Import
+
+```
+POST /api/v1/asbuilt/import-by-sequence
+Content-Type: application/json
+```
+
+Cleaner alternative to `/asbuilt/import`. Every pole carries a required `sequence` number. Spans reference poles by `from_sequence` / `to_sequence` — no `pole_code` disambiguation, no duplicate confusion.
+
+**Key difference from `/import`:**
+
+| | `/import` | `/import-by-sequence` |
+|---|---|---|
+| Span matching | `from_pole_code` + optional `from_pole_index` | `from_sequence` + `to_sequence` only |
+| Duplicate poles | Need index/GPS hints | Sequence is unique per node — no ambiguity |
+| `sequence` on pole | Optional (`pole_index`) | **Required** |
+
+**Payload:**
+
+```json
+{
+  "node_id":   "TY1401",
+  "node_name": "MONTEVISTA SUBD.",
+  "area_id":   1,
+  "region":    "CALABARZON",
+  "province":  "LAGUNA",
+  "city":      "STA. ROSA",
+  "poles": [
+    { "sequence": 1, "pole_code": "PL-001", "lat": 14.539770, "lng": 121.109219, "barangay_name": "Balibago" },
+    { "sequence": 2, "pole_code": "PL-002", "lat": 14.540100, "lng": 121.109800, "barangay_name": "Balibago" },
+    { "sequence": 3, "pole_code": "PL-003", "lat": 14.540750, "lng": 121.110300, "barangay_name": "Tagapo"   }
+  ],
+  "spans": [
+    {
+      "from_sequence": 1, "to_sequence": 2,
+      "strand_length": 50.5, "number_of_runs": 1,
+      "components": { "node": 2, "amplifier": 1, "extender": 0, "tsc": 1, "powersupply": 0, "ps_housing": 0 }
+    },
+    {
+      "from_sequence": 2, "to_sequence": 3,
+      "strand_length": 45.0, "number_of_runs": 2,
+      "components": { "node": 1, "amplifier": 0, "extender": 1, "tsc": 0, "powersupply": 1, "ps_housing": 1 }
+    }
+  ]
+}
+```
+
+**Pole fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pole_index` | string | ✅ | Unique identifier for this pole in the DXF — e.g. `"NPT-1"`, `"CV8-001"`. Saved to `skycable_poles.pole_index` |
+| `sequence` | integer | ❌ | **NOT the import key.** `sequence` is the teardown order — auto-assigned by the backend when a lineman starts a pole via mobile app |
+| `pole_code` | string | ✅ | Original DXF pole label e.g. `"NPT"`. Stored UPPERCASE |
+| `lat` / `latitude` | decimal | ❌ | −90 to 90 |
+| `lng` / `longitude` | decimal | ❌ | −180 to 180 |
+| `barangay_name` | string | ❌ | Per-pole barangay |
+
+> `*` At least one of `pole_index` or `sequence` is required per pole.
+
+**Span fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `from_pole_index` | string | ✅ | `pole_index` of the starting pole e.g. `"NPT-1"` |
+| `to_pole_index` | string | ✅ | `pole_index` of the ending pole e.g. `"CV8-001"` |
+| `strand_length` | decimal | ❌ | Meters |
+| `number_of_runs` | integer | ❌ | Default 1 |
+| `components` | object | ❌ | Same structure as `/import` |
+
+
+**Why `pole_index` instead of `sequence`:**
+
+When a DXF has multiple poles with the same name (NPT, PT, NT), `pole_index` gives each a unique human-readable ID (`NPT-1`, `NPT-2`, `NPT-3`). Spans reference these exact IDs so there is **zero ambiguity** — `NPT-1` always connects to the correct physical pole regardless of name collisions.
+
+**Response `201`:** Same shape as `/import` response.
 
 ---
 
@@ -825,24 +955,28 @@ curl -X POST "$BASE/asbuilt/import" \
     "city":      "STA. ROSA",
     "poles": [
       {
-        "pole_code": "PL-001",
-        "latitude":  14.53977,
-        "longitude": 121.10921,
+        "pole_index":    1,
+        "pole_code":     "PL-001",
+        "latitude":      14.53977,
+        "longitude":     121.10921,
         "barangay_name": "Balibago"
       },
       {
-        "pole_code": "PL-002",
-        "latitude":  14.54010,
-        "longitude": 121.10980,
+        "pole_index":    2,
+        "pole_code":     "PL-002",
+        "latitude":      14.54010,
+        "longitude":     121.10980,
         "barangay_name": "Balibago"
       }
     ],
     "spans": [
       {
-        "from_pole_code": "PL-001",
-        "to_pole_code":   "PL-002",
-        "strand_length":  50.5,
-        "number_of_runs": 1,
+        "from_pole_code":  "PL-001",
+        "to_pole_code":    "PL-002",
+        "from_pole_index": 1,
+        "to_pole_index":   2,
+        "strand_length":   50.5,
+        "number_of_runs":  1,
         "components": {
           "node": 2, "amplifier": 1, "extender": 0,
           "tsc": 1, "powersupply": 0, "ps_housing": 0

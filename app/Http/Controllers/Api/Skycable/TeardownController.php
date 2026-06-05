@@ -262,6 +262,46 @@ class TeardownController extends Controller
         });
     }
 
+    /**
+     * Roll up span_summaries → skycable_nodes actual totals.
+     * Call this after any span summary update so the node always
+     * reflects the live sum of all its spans' collected quantities.
+     */
+    private function rollupNodeActuals(int $nodeId): void
+    {
+        $sums = SkycableSpanSummary::where('node_id', $nodeId)
+            ->selectRaw('
+                SUM(actual_cable)       as actual_cable,
+                SUM(actual_node)        as actual_node,
+                SUM(actual_amplifier)   as actual_amplifier,
+                SUM(actual_extender)    as actual_extender,
+                SUM(actual_tsc)         as actual_tsc,
+                SUM(actual_powersupply) as actual_powersupply,
+                SUM(actual_ps_housing)  as actual_ps_housing
+            ')
+            ->first();
+
+        if (! $sums) return;
+
+        $completed = SkycableSpan::where('node_id', $nodeId)
+            ->where('status', 'completed')
+            ->count();
+        $total = SkycableSpan::where('node_id', $nodeId)
+            ->whereNotIn('status', ['superseded', 'cancelled'])
+            ->count();
+
+        SkycableNode::where('id', $nodeId)->update([
+            'actual_cable'       => (float) ($sums->actual_cable       ?? 0),
+            'actual_node'        => (int)   ($sums->actual_node        ?? 0),
+            'actual_amplifier'   => (int)   ($sums->actual_amplifier   ?? 0),
+            'actual_extender'    => (int)   ($sums->actual_extender    ?? 0),
+            'actual_tsc'         => (int)   ($sums->actual_tsc         ?? 0),
+            'actual_powersupply' => (int)   ($sums->actual_powersupply ?? 0),
+            'actual_ps_housing'  => (int)   ($sums->actual_ps_housing  ?? 0),
+            'progress_percentage'=> $total > 0 ? round(($completed / $total) * 100, 1) : 0,
+        ]);
+    }
+
     private function sanitizePath($name)
     {
         return preg_replace('/[^A-Za-z0-9_\- ]/', '', $name);
@@ -297,6 +337,8 @@ class TeardownController extends Controller
                 'updated_by' => $userId,
             ]
         );
+
+        $this->rollupNodeActuals($span->node_id);
 
         foreach (array_filter([$span->fromPole, $span->toPole]) as $skycablePole) {
             if (! $skycablePole->pole) {
@@ -502,6 +544,9 @@ class TeardownController extends Controller
                 ]
             );
 
+            // Roll up span-level actuals → node-level actuals so dashboard totals stay current
+            $this->rollupNodeActuals($directSpan->node_id);
+
             // For each pole in the span, check if ALL connected spans are now completed.
             // If so, mark the physical pole as cleared.
             $skyPoles = array_filter([$directSpan->fromPole, $directSpan->toPole]);
@@ -602,6 +647,9 @@ class TeardownController extends Controller
                     'actual_cable'         => $reports->sum('actual_cable'),
                     'updated_by'           => $user->id,
                 ]);
+
+                // Roll up to node-level actuals
+                $this->rollupNodeActuals($span->node_id);
             }
 
             // Release the cable slots — set occupied_by to 'free' (not null, column is an enum)

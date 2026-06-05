@@ -178,6 +178,15 @@
 <script>
 const BASE = '/api/v1';
 
+// Read token from URL param or localStorage (passed from web dashboard)
+const TOKEN = new URLSearchParams(location.search).get('token')
+           || localStorage.getItem('auth_token')
+           || '';
+
+function authHeaders() {
+  return TOKEN ? { 'Authorization': 'Bearer ' + TOKEN, 'Accept': 'application/json' } : { 'Accept': 'application/json' };
+}
+
 function fmtTime(iso) {
   try { return new Date(iso).toLocaleTimeString('en-PH', {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}); }
   catch { return iso?.substring(11,19) || '—'; }
@@ -199,8 +208,8 @@ function renderChart(containerId, data, labelKey, valueKey) {
 async function load() {
   try {
     const [statusRes, consumeRes] = await Promise.all([
-      fetch(`${BASE}/apistatus`),
-      fetch(`${BASE}/apiconsumption`)
+      fetch(`${BASE}/apistatus`, { headers: authHeaders() }),
+      fetch(`${BASE}/apiconsumption`, { headers: authHeaders() })
     ]);
     const s = await statusRes.json();
     const c = await consumeRes.json();
@@ -307,7 +316,7 @@ function statusLabel(code) {
 async function resetStats() {
   if (!confirm('Reset all API stats counters?')) return;
   try {
-    const res = await fetch(`${BASE}/apiconsumption/reset`, { method: 'DELETE' });
+    const res = await fetch(`${BASE}/apiconsumption/reset`, { method: 'DELETE', headers: authHeaders() });
     const d = await res.json();
     alert(d.message || 'Reset done');
     load();
