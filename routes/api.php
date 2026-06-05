@@ -12,11 +12,18 @@ use App\Http\Controllers\Api;
 // Single health-check endpoint.
 Route::get('/ping', fn () => response()->json(['status' => 'ok', 'version' => 'v1']));
 
+// ── Maintenance status (public — polled by frontend) ─────────────────────────
+Route::get('/maintenance', [ApiMaintenanceController::class, 'status']);
+
 // ── API monitoring — admin only ───────────────────────────────────────────────
 Route::get('/apistatus', [Api\ApiStatusController::class, 'status']); // public health check
 Route::middleware(['auth:sanctum', 'company:telcovantage'])->group(function () {
     Route::get('/apiconsumption',          [Api\ApiStatusController::class, 'consumption']);
     Route::delete('/apiconsumption/reset', [Api\ApiStatusController::class, 'reset']);
+
+    // Maintenance toggle — admin only
+    Route::post('/admin/maintenance',            [Api\MaintenanceController::class, 'toggle']);
+    Route::delete('/admin/maintenance/lift-all', [Api\MaintenanceController::class, 'liftAll']);
 });
 
 // ── Public file serving (no auth — images embedded in reports) ────────────────
