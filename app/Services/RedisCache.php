@@ -118,37 +118,34 @@ class RedisCache
      */
     public static function forgetPattern(string $pattern): void
     {
-        // Convert glob pattern to a prefix for prefix-based eviction
-        $prefix = rtrim(str_replace('*', '', $pattern), ':');
-
-        // For file/database drivers: scan and delete matching keys
         try {
             $store = Cache::getStore();
 
-            // Redis driver — use KEYS command via the underlying client
             if (method_exists($store, 'connection')) {
-                $connection = $store->connection();
-                $fullPrefix  = config('cache.prefix') ? config('cache.prefix') . ':' . $pattern : $pattern;
-                $keys = $connection->keys($fullPrefix);
-                foreach ($keys as $key) {
-                    // Strip the cache prefix before calling forget
-                    $cachePrefix = config('cache.prefix') . ':';
-                    $bare = str_starts_with($key, $cachePrefix)
-                        ? substr($key, strlen($cachePrefix))
-                        : $key;
-                    Cache::forget($bare);
-                    Cache::forget($bare . ':etag');
+                $connection  = $store->connection();
+                $cachePrefix = config('cache.prefix', '');
+
+                // Key format in Redis: {redis_conn_prefix}{cache_prefix}{key}
+                // predis automatically prepends the redis_conn_prefix on every
+                // command, so we only need to include {cache_prefix} in our pattern.
+                // KEYS returns full keys (with redis_conn_prefix). DEL must receive
+                // those full keys — use executeRaw to bypass predis re-prefixing.
+                $searchPattern = $cachePrefix . $pattern;
+                $keys = $connection->keys($searchPattern);
+
+                if (!empty($keys)) {
+                    foreach (array_chunk($keys, 500) as $chunk) {
+                        $connection->executeRaw(array_merge(['DEL'], $chunk));
+                    }
                 }
                 return;
             }
-
-            // File/database driver — flush matching keys we know about
-            // (pattern-based scan is not supported; callers should prefer forget() with explicit keys)
         } catch (\Throwable) {
             // Never crash a mutation because cache invalidation failed
         }
 
-        // Fallback: best-effort forget of the prefix key itself
+        // Fallback for file/database drivers
+        $prefix = rtrim(str_replace('*', '', $pattern), ':');
         Cache::forget($prefix);
         Cache::forget($prefix . ':etag');
     }

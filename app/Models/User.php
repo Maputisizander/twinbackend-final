@@ -20,7 +20,7 @@ class User extends Authenticatable
         'current_gps_lat', 'current_gps_lng',
         'last_seen_at', 'last_login',
         'status', 'password_reset_required', 'temp_password_set_at',
-        'can_approve_delivery',
+        'can_approve_delivery', 'is_driver',
     ];
 
     protected $hidden = ['password', 'remember_token'];
@@ -37,6 +37,7 @@ class User extends Authenticatable
             'temp_password_set_at'    => 'datetime',
             'password_reset_required' => 'boolean',
             'can_approve_delivery'    => 'boolean',
+            'is_driver'               => 'boolean',
         ];
     }
 

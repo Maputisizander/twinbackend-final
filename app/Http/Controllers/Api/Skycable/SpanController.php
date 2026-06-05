@@ -6,6 +6,7 @@ use App\Http\Concerns\CachesSkycableResponses;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Pole;
+use App\Models\SkycableNode;
 use App\Models\SkycablePole;
 use App\Models\SkycableSpan;
 use App\Models\SkycableSpanSummary;
@@ -18,12 +19,61 @@ class SpanController extends Controller
 
     public function index(Request $request)
     {
-        return $this->skycableCachedJson('spans.index', 120, function () use ($request) {
-            return SkycableSpan::with(['node', 'fromPole.pole', 'toPole.pole', 'summary'])
-                ->when($request->node_id, fn ($q) => $q->where('node_id', $request->node_id))
-                ->when($request->status,  fn ($q) => $q->where('status', $request->status))
-                ->get();
-        }, $request);
+        $perPage  = (int) ($request->per_page ?? 0);
+        $nodeId   = $request->node_id;
+        $status   = $request->status;
+        $search   = $request->search;
+
+        $query = SkycableSpan::with(['node', 'fromPole.pole', 'toPole.pole', 'summary'])
+            ->when($nodeId,  fn ($q) => $q->where('node_id', $nodeId))
+            ->when($status,  fn ($q) => $q->where('status', $status))
+            ->when($search,  fn ($q) => $q->where('span_code', 'like', "%{$search}%"))
+            ->orderBy('id', 'desc');
+
+        if ($perPage > 0) {
+            return response()->json($query->paginate($perPage));
+        }
+
+        $cacheKey = "spans.index" . ($nodeId ? ".node{$nodeId}" : "") . ($status ? ".{$status}" : "");
+        return $this->skycableCachedJson($cacheKey, 120, fn () => $query->get(), $request);
+    }
+
+    /**
+     * GET /skycable/nodes/{node}/spans
+     * All spans belonging to a specific node, with full relations.
+     */
+    public function byNode(SkycableNode $node, Request $request)
+    {
+        $status = $request->status;
+
+        $spans = SkycableSpan::with(['fromPole.pole', 'toPole.pole', 'summary'])
+            ->where('node_id', $node->id)
+            ->when($status, fn ($q) => $q->where('status', $status))
+            ->whereNotIn('status', ['superseded'])
+            ->orderBy('id')
+            ->get();
+
+        return response()->json([
+            'node'  => $node->only(['id', 'name', 'full_label']),
+            'spans' => $spans,
+            'stats' => $this->buildStats($spans),
+        ]);
+    }
+
+    /**
+     * GET /skycable/spans/stats
+     * Aggregate statistics — optionally scoped to a node.
+     */
+    public function stats(Request $request)
+    {
+        $nodeId = $request->node_id;
+
+        $spans = SkycableSpan::with('summary')
+            ->when($nodeId, fn ($q) => $q->where('node_id', $nodeId))
+            ->whereNotIn('status', ['superseded', 'cancelled'])
+            ->get();
+
+        return response()->json($this->buildStats($spans));
     }
 
     public function store(Request $request)
@@ -42,7 +92,6 @@ class SpanController extends Controller
             'tsc'              => 'nullable|integer|min:0',
             'power_supply'     => 'nullable|integer|min:0',
             'power_supply_case'=> 'nullable|integer|min:0',
-            // aliases used by web frontend
             'powersupply'      => 'nullable|integer|min:0',
             'ps_housing'       => 'nullable|integer|min:0',
         ]);
@@ -59,14 +108,13 @@ class SpanController extends Controller
 
         $this->syncComponents($span, $data);
 
-        // Recalculate pole statuses — a new pending span makes a cleared pole active again
         $poleChanges = $this->refreshPoleStatuses($span);
 
         AuditLog::record('created', $span, null, array_merge($span->toArray(), ['pole_status_changes' => $poleChanges]));
-        $this->bumpSkycableCacheVersion();
+        \App\Services\CacheWarmer::spans($span->node_id);
 
         return response()->json([
-            'span'               => $span->load(['fromPole.pole', 'toPole.pole', 'summary']),
+            'span'                => $span->load(['fromPole.pole', 'toPole.pole', 'summary']),
             'pole_status_changes' => $poleChanges,
         ], 201);
     }
@@ -106,9 +154,37 @@ class SpanController extends Controller
         $this->syncComponents($span, $data);
 
         AuditLog::record('updated', $span, $old, $span->toArray());
-        $this->bumpSkycableCacheVersion();
+        \App\Services\CacheWarmer::spans($span->node_id);
 
         return response()->json($span->load(['fromPole.pole', 'toPole.pole', 'summary']));
+    }
+
+    /**
+     * PATCH /skycable/spans/{span}/status
+     * Quick single-field status update without touching other fields.
+     */
+    public function updateStatus(Request $request, SkycableSpan $span)
+    {
+        $data = $request->validate([
+            'status' => 'required|in:pending,in_progress,completed,cancelled',
+        ]);
+
+        $old = $span->only(['status']);
+        $span->update(['status' => $data['status']]);
+
+        if ($data['status'] === 'completed') {
+            $span->update(['completed_at' => now()]);
+        }
+
+        $poleChanges = $this->refreshPoleStatuses($span);
+
+        AuditLog::record('status_changed', $span, $old, ['status' => $data['status']]);
+        \App\Services\CacheWarmer::spans($span->node_id);
+
+        return response()->json([
+            'span'                => $span->load(['fromPole.pole', 'toPole.pole', 'summary']),
+            'pole_status_changes' => $poleChanges,
+        ]);
     }
 
     public function destroy(SkycableSpan $span)
@@ -125,10 +201,6 @@ class SpanController extends Controller
      *
      * POST /skycable/spans/{span}/split
      * Body: { pole_name: string, idempotency_key?: string }
-     *
-     * Returns: { new_pole, span_a, span_b }
-     *   span_a: original from_pole → new_pole
-     *   span_b: new_pole → original to_pole
      */
     public function split(Request $request, SkycableSpan $span)
     {
@@ -137,7 +209,6 @@ class SpanController extends Controller
             'idempotency_key' => 'nullable|string|max:100',
         ]);
 
-        // Idempotency: if already split with this key, return existing result
         if ($key = $request->input('idempotency_key')) {
             $existing = SkycableSpan::where('idempotency_key', $key)->first();
             if ($existing) {
@@ -159,14 +230,12 @@ class SpanController extends Controller
         $result = DB::transaction(function () use ($span, $request, $key) {
             $poleName = $request->input('pole_name');
 
-            // 1. Create the physical pole
             $newPole = Pole::create([
                 'pole_code' => $poleName,
                 'lat'       => null,
                 'lng'       => null,
             ]);
 
-            // 2. Register it in skycable_poles — auto-assign next sequence in this node
             $nextSeq = SkycablePole::where('node_id', $span->node_id)->max('sequence') + 1;
             $newSkycablePole = SkycablePole::create([
                 'node_id'  => $span->node_id,
@@ -174,7 +243,6 @@ class SpanController extends Controller
                 'sequence' => $nextSeq,
             ]);
 
-            // 3. span_a: original from_pole → new pole (inherit half the cable/components)
             $spanA = SkycableSpan::create([
                 'node_id'          => $span->node_id,
                 'from_pole_id'     => $span->from_pole_id,
@@ -187,7 +255,6 @@ class SpanController extends Controller
                 'idempotency_key'  => $key ? $key . '_a' : null,
             ]);
 
-            // 4. span_b: new pole → original to_pole
             $spanB = SkycableSpan::create([
                 'node_id'          => $span->node_id,
                 'from_pole_id'     => $newSkycablePole->id,
@@ -200,7 +267,6 @@ class SpanController extends Controller
                 'idempotency_key'  => $key ? $key . '_b' : null,
             ]);
 
-            // 5. Copy expected components to both new spans from span_summaries
             $parentSummary = SkycableSpanSummary::where('span_id', $span->id)->first();
             foreach ([$spanA->id, $spanB->id] as $sid) {
                 SkycableSpanSummary::create([
@@ -216,7 +282,6 @@ class SpanController extends Controller
                 ]);
             }
 
-            // 6. Mark original span as superseded
             $span->update(['status' => 'superseded']);
 
             AuditLog::record('split', $span, $span->toArray(), [
@@ -232,7 +297,6 @@ class SpanController extends Controller
             ];
         });
 
-        // Recalculate pole statuses — new pending spans bring cleared poles back to pending
         $poleChanges = array_merge(
             $this->refreshPoleStatuses($result['span_a']),
             $this->refreshPoleStatuses($result['span_b']),
@@ -272,21 +336,32 @@ class SpanController extends Controller
         return response()->json($span->load('summary'));
     }
 
-    /**
-     * Recalculate skycable_status for poles connected to a span.
-     *
-     * A pole only becomes pending/in_progress if it VERIFIABLY has at least
-     * one non-superseded, non-completed span in the database.
-     * This prevents a cleared pole from going back to pending by mistake.
-     *
-     * Rules:
-     *  - Has pending spans only              → pending   (teardown available)
-     *  - Has both completed & pending spans  → in_progress (teardown still available)
-     *  - All spans completed, none pending   → cleared   (done, hidden from active list)
-     *  - No spans at all                     → unchanged (we never touch it)
-     *
-     * Returns array of [pole_code => new_status] for logging/response.
-     */
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private function buildStats($spans): array
+    {
+        $active = $spans->whereNotIn('status', ['superseded', 'cancelled']);
+
+        return [
+            'total'            => $active->count(),
+            'pending'          => $active->where('status', 'pending')->count(),
+            'in_progress'      => $active->where('status', 'in_progress')->count(),
+            'completed'        => $active->where('status', 'completed')->count(),
+            'cancelled'        => $spans->where('status', 'cancelled')->count(),
+            'total_cable_m'    => round($active->sum(fn ($s) => $s->summary?->expected_cable ?? 0), 2),
+            'completed_cable_m'=> round($active->where('status', 'completed')->sum(fn ($s) => $s->summary?->expected_cable ?? 0), 2),
+            'total_strand_m'   => round($active->sum('strand_length'), 2),
+            'components' => [
+                'nodes'       => $active->sum(fn ($s) => $s->summary?->expected_node ?? 0),
+                'amplifiers'  => $active->sum(fn ($s) => $s->summary?->expected_amplifier ?? 0),
+                'extenders'   => $active->sum(fn ($s) => $s->summary?->expected_extender ?? 0),
+                'tsc'         => $active->sum(fn ($s) => $s->summary?->expected_tsc ?? 0),
+                'powersupply' => $active->sum(fn ($s) => $s->summary?->expected_powersupply ?? 0),
+                'ps_housing'  => $active->sum(fn ($s) => $s->summary?->expected_ps_housing ?? 0),
+            ],
+        ];
+    }
+
     private function refreshPoleStatuses(SkycableSpan $span): array
     {
         $skycablePoleIds = array_filter([$span->from_pole_id, $span->to_pole_id]);
@@ -296,12 +371,10 @@ class SpanController extends Controller
             $skycablePole = SkycablePole::with('pole')->find($spId);
             if (!$skycablePole?->pole) continue;
 
-            // Only count spans that are not superseded (superseded = already split, irrelevant)
             $allSpans = SkycableSpan::where(function ($q) use ($spId) {
                 $q->where('from_pole_id', $spId)->orWhere('to_pole_id', $spId);
             })->whereNotIn('status', ['superseded', 'cancelled'])->get();
 
-            // Guard: pole has no actionable spans — do not touch its status
             if ($allSpans->isEmpty()) continue;
 
             $pendingSpans   = $allSpans->where('status', '!=', 'completed');
@@ -311,9 +384,9 @@ class SpanController extends Controller
             $hasCompleted = $completedSpans->isNotEmpty();
 
             $newStatus = match (true) {
-                $hasPending && !$hasCompleted => 'pending',      // all new/unstarted
-                $hasPending &&  $hasCompleted => 'in_progress',  // some done, some left
-                default                       => 'cleared',      // all done
+                $hasPending && !$hasCompleted => 'pending',
+                $hasPending &&  $hasCompleted => 'in_progress',
+                default                       => 'cleared',
             };
 
             $poleCode = $skycablePole->pole->pole_code;
@@ -321,8 +394,8 @@ class SpanController extends Controller
             if ($skycablePole->pole->skycable_status !== $newStatus) {
                 $skycablePole->pole->update(['skycable_status' => $newStatus]);
                 $changed[$poleCode] = [
-                    'from' => $skycablePole->pole->skycable_status,
-                    'to'   => $newStatus,
+                    'from'   => $skycablePole->pole->skycable_status,
+                    'to'     => $newStatus,
                     'reason' => "has {$pendingSpans->count()} pending + {$completedSpans->count()} completed spans",
                 ];
             }
@@ -333,12 +406,10 @@ class SpanController extends Controller
 
     private function syncComponents(SkycableSpan $span, array $data): void
     {
-        // Compute expected cable from strand × runs
         $strand = (float) ($span->strand_length ?? 0);
         $runs   = (int)   ($span->number_of_runs ?? 1);
         $expectedCable = $strand * $runs;
 
-        // Accept both field name conventions (power_supply vs powersupply)
         $fields = [
             'expected_cable'       => $expectedCable,
             'expected_node'        => (int) ($data['nodes_count']      ?? $data['expected_node']      ?? 0),

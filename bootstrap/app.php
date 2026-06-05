@@ -23,6 +23,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->appendToGroup('api', [
             \App\Http\Middleware\ApiRequestLogger::class,
             \App\Http\Middleware\ETagMiddleware::class,
+            \App\Http\Middleware\TrackApiStats::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

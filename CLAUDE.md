@@ -8,9 +8,11 @@ Laravel 11 API backend for a multi-company telco field operations platform. Serv
 
 ## Tunnel / Base URL
 ```
-https://7a33-112-210-248-33.ngrok-free.app
+https://quack-useable-thesaurus.ngrok-free.dev   ← static domain (never changes)
+http://192.168.1.17:8080                          ← local Wi-Fi
 API prefix: /api/v1   (set in bootstrap/app.php → apiPrefix)
 ```
+Start tunnel: `ngrok http --domain=quack-useable-thesaurus.ngrok-free.dev 8080`  
 All routes in `routes/api.php` are automatically prefixed with `/api/v1`.  
 ngrok — every request needs header: `ngrok-skip-browser-warning: 1`
 

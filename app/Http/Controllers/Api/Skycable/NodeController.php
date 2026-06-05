@@ -93,7 +93,7 @@ class NodeController extends Controller
 
         $node = SkycableNode::create($data);
         AuditLog::record('create', $node, null, $node->toArray());
-        $this->bumpSkycableCacheVersion();
+        \App\Services\CacheWarmer::nodes($node->area_id);
 
         return response()->json($node->load('area'), 201);
     }
@@ -175,11 +175,7 @@ class NodeController extends Controller
         $node->update($data);
         AuditLog::record('update', $node, $old, $node->fresh()->toArray());
 
-        // Clear all node list caches so web dashboard sees fresh status
-        Cache::forget('nodes_index_50_p1');
-        Cache::forget('nodes_index_100_p1');
-        Cache::forget('nodes_index_200_p1');
-        $this->bumpSkycableCacheVersion();
+        \App\Services\CacheWarmer::nodes($node->area_id);
 
         return response()->json($node->fresh()->load('area'));
     }

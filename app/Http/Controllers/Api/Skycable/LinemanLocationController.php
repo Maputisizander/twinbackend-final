@@ -3,12 +3,16 @@
 namespace App\Http\Controllers\Api\Skycable;
 
 use App\Http\Controllers\Controller;
+use App\Models\AuditLog;
 use App\Models\LinemanLocation;
+use App\Models\WarehouseReceipt;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 
 class LinemanLocationController extends Controller
 {
+    private const ARRIVAL_RADIUS_METERS = 150;
+
     /**
      * POST skycable/lineman/location
      * Mobile app pings every 10 minutes with GPS + reverse-geocoded address.
@@ -40,7 +44,13 @@ class LinemanLocationController extends Controller
             ]
         );
 
-        return response()->json(['ok' => true]);
+        $arrivedReceiptIds = $this->autoArrivePendingReceipts(
+            $request->user()->id,
+            (float) $data['latitude'],
+            (float) $data['longitude']
+        );
+
+        return response()->json(['ok' => true, 'arrived_receipt_ids' => $arrivedReceiptIds]);
     }
 
     /**
@@ -97,5 +107,48 @@ class LinemanLocationController extends Controller
         });
 
         return response()->json($data);
+    }
+
+    private function autoArrivePendingReceipts(int $userId, float $lat, float $lng): array
+    {
+        $arrivedReceiptIds = [];
+
+        WarehouseReceipt::with('warehouse')
+            ->where('received_by', $userId)
+            ->where('status', 'pending')
+            ->get()
+            ->each(function (WarehouseReceipt $receipt) use ($lat, $lng, &$arrivedReceiptIds) {
+                $warehouse = $receipt->warehouse;
+                if (! $warehouse || $warehouse->lat === null || $warehouse->lng === null) {
+                    return;
+                }
+
+                $distance = $this->distanceMeters($lat, $lng, (float) $warehouse->lat, (float) $warehouse->lng);
+                if ($distance > self::ARRIVAL_RADIUS_METERS) {
+                    return;
+                }
+
+                $old = $receipt->toArray();
+                $receipt->status = 'arrived';
+                $receipt->save();
+                AuditLog::record('update', $receipt, $old, $receipt->fresh()->toArray());
+                $arrivedReceiptIds[] = $receipt->id;
+            });
+
+        return $arrivedReceiptIds;
+    }
+
+    private function distanceMeters(float $fromLat, float $fromLng, float $toLat, float $toLng): float
+    {
+        $earthRadiusM = 6371000;
+        $dLat = deg2rad($toLat - $fromLat);
+        $dLng = deg2rad($toLng - $fromLng);
+        $lat1 = deg2rad($fromLat);
+        $lat2 = deg2rad($toLat);
+
+        $a = sin($dLat / 2) ** 2
+            + cos($lat1) * cos($lat2) * sin($dLng / 2) ** 2;
+
+        return $earthRadiusM * 2 * atan2(sqrt($a), sqrt(1 - $a));
     }
 }

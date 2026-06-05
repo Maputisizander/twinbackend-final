@@ -2,16 +2,37 @@
 
 **Version:** v1  
 **Backend:** TwinBackend (Laravel 11)  
-**Base URL:** `https://7a33-112-210-248-33.ngrok-free.app/api/v1`
+**Base URL (online — for employees):** `https://quack-useable-thesaurus.ngrok-free.dev/api/v1`  
+**Base URL (local Wi-Fi — same network only):** `http://192.168.1.17:8080/api/v1`
+
+> **Employees posting from outside the office must use the ngrok URL.**  
+> Local IP only works when the device is on the same Wi-Fi as the backend server.
+
+---
+
+## Base URL Setup (Frontend Constant)
+
+Set this once in your app config:
+
+```js
+// ✅ Online — use this for employees posting remotely (ngrok static domain)
+const BASE_URL = 'https://quack-useable-thesaurus.ngrok-free.dev/api/v1'
+
+// Local Wi-Fi only — use this when device is on the same network as the server
+// const BASE_URL = 'http://192.168.1.17:8080/api/v1'
+```
+
+All endpoint paths in this document are relative to `BASE_URL`.  
+Example: `GET /asbuilt/sites` → `GET https://quack-useable-thesaurus.ngrok-free.dev/api/v1/asbuilt/sites`
 
 ---
 
 ## Authentication
 
-| Header | Value |
-|--------|-------|
-| `X-AsBuilt-Key` | `asbuilt-iq-secret-key-2026` |
-| `ngrok-skip-browser-warning` | `1` |
+| Header | Value | Required |
+|--------|-------|----------|
+| `X-AsBuilt-Key` | `asbuilt-iq-secret-key-2026` | ✅ Always |
+| `ngrok-skip-browser-warning` | `1` | ✅ Always (required when using ngrok URL) |
 
 No user login required. API key only.
 
@@ -25,7 +46,7 @@ No user login required. API key only.
 | **Node Identifier** | `skycable_nodes.node_id` — VARCHAR string, e.g. `"TY1401"` |
 | **Node Name** | `skycable_nodes.name` — human name, e.g. `"MONTEVISTA SUBD."` |
 | **Pole** | `poles` + `skycable_poles` |
-| **Span** | `skycable_spans` |
+| **Span** | `skycable_spans` + `skycable_span_summaries` |
 
 ---
 
@@ -51,7 +72,7 @@ No user login required. API key only.
 
 6. If user adds node manually:
          Display a form input for node_id, node_name, region, province, city,
-         barangay_code, and barangay_name
+         and barangay_name
 
 7. User uploads poles and spans
 
@@ -67,8 +88,16 @@ No user login required. API key only.
 ## ForEach Pattern
 
 ```js
+const BASE_URL = 'https://quack-useable-thesaurus.ngrok-free.dev/api/v1'
+const API_KEY  = 'asbuilt-iq-secret-key-2026'
+const headers  = {
+  'X-AsBuilt-Key': API_KEY,
+  'ngrok-skip-browser-warning': '1'
+}
+
 // Step 1 — Load all sites / areas
-const areas = await GET('/asbuilt/sites')
+const sitesRes = await fetch(`${BASE_URL}/asbuilt/sites`, { headers })
+const areas    = await sitesRes.json()
 
 // Step 2 — Display every area
 areas.forEach(area => {
@@ -83,7 +112,8 @@ areas.forEach(area => {
 const selectedArea = area
 
 // Step 4 — Load all nodes under selected area
-const { nodes } = await GET(`/asbuilt/sites/${selectedArea.id}/nodes`)
+const nodesRes     = await fetch(`${BASE_URL}/asbuilt/sites/${selectedArea.id}/nodes`, { headers })
+const { nodes }    = await nodesRes.json()
 
 // Step 5 — Display every existing node
 nodes.forEach(node => {
@@ -193,9 +223,66 @@ If the `node_id` already exists inside the selected `area_id`, the backend updat
 
 ---
 
-## Existing Node Import Example
+## Import Payload Structure
 
-Use this when the user selects an existing node from the node list.
+### Required Fields (root level)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `node_id` | string | ✅ | VARCHAR identifier e.g. `"TY1401"` — maps to `skycable_nodes.node_id` |
+| `node_name` | string | ✅ | Saved to `skycable_nodes.name` |
+| `area_id` | integer | ✅ | From `GET /asbuilt/sites` |
+| `region` | string | ❌ | e.g. `"CALABARZON"` — saved to node |
+| `province` | string | ❌ | e.g. `"LAGUNA"` — saved to node |
+| `city` | string | ❌ | e.g. `"STA. ROSA"` — saved to node |
+| `poles` | array | ✅ | Minimum 1 pole required |
+| `spans` | array | ❌ | Optional. Empty array or omit if no spans |
+
+### Pole Fields (`poles[]`)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `pole_code` | string | ✅ | Stored UPPERCASE. e.g. `"PL-001"` |
+| `latitude` | decimal | ❌ | −90 to 90 |
+| `longitude` | decimal | ❌ | −180 to 180 |
+| `barangay_name` | string | ❌ | Per-pole barangay. The node's `barangay_name` is auto-set to the most frequent value across all poles |
+
+### Span Fields (`spans[]`)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `from_pole_code` | string | ✅ | Must match a `pole_code` in the `poles` array |
+| `to_pole_code` | string | ✅ | Must match a `pole_code` in the `poles` array. Must be different from `from_pole_code` |
+| `strand_length` | decimal | ❌ | Length in meters. e.g. `50.5` |
+| `number_of_runs` | integer | ❌ | Minimum 1. Default: `1`. `expected_cable = strand_length × number_of_runs` |
+| `components` | object | ❌ | Equipment counts. All default to `0` if omitted |
+| `components.node` | integer | ❌ | Node count. Min 0 |
+| `components.amplifier` | integer | ❌ | Amplifier count. Min 0 |
+| `components.extender` | integer | ❌ | Extender count. Min 0 |
+| `components.tsc` | integer | ❌ | TSC count. Min 0 |
+| `components.powersupply` | integer | ❌ | Power supply count. Min 0 |
+| `components.ps_housing` | integer | ❌ | PS housing count. Min 0 |
+
+> `expected_cable` is auto-computed: `strand_length × number_of_runs` and saved to `skycable_span_summaries.expected_cable`.
+
+### Disambiguation Fields for Spans (optional — used when pole codes repeat)
+
+If the same `pole_code` appears more than once in the `poles` array (duplicate pole codes at different GPS coordinates), you can add coordinate hints or index hints to tell the backend which physical pole to use for `from` and `to`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `from_latitude` / `from_pole_latitude` / `from_lat` | decimal | GPS latitude of the from-pole to match |
+| `from_longitude` / `from_pole_longitude` / `from_lng` | decimal | GPS longitude of the from-pole to match |
+| `to_latitude` / `to_pole_latitude` / `to_lat` | decimal | GPS latitude of the to-pole to match |
+| `to_longitude` / `to_pole_longitude` / `to_lng` | decimal | GPS longitude of the to-pole to match |
+| `from_pole_index` / `from_index` | integer | Zero-based index of the from-pole in the `poles` array |
+| `to_pole_index` / `to_index` | integer | Zero-based index of the to-pole in the `poles` array |
+
+The backend resolves in priority: **coordinate match → index match → first occurrence**.
+
+---
+
+## Full Import Example
 
 ```json
 {
@@ -205,37 +292,23 @@ Use this when the user selects an existing node from the node list.
   "region":    "CALABARZON",
   "province":  "LAGUNA",
   "city":      "STA. ROSA",
-  "barangay_code": "043428001",
-  "barangay_name": "Balibago",
   "poles": [
     {
       "pole_code":     "PL-001",
       "latitude":      14.539770,
       "longitude":     121.109219,
-      "region":        "CALABARZON",
-      "province":      "LAGUNA",
-      "city":          "STA. ROSA",
-      "barangay_code": "043428001",
       "barangay_name": "Balibago"
     },
     {
       "pole_code":     "PL-002",
       "latitude":      14.540100,
       "longitude":     121.109800,
-      "region":        "CALABARZON",
-      "province":      "LAGUNA",
-      "city":          "STA. ROSA",
-      "barangay_code": "043428001",
       "barangay_name": "Balibago"
     },
     {
       "pole_code":     "PL-003",
       "latitude":      14.540750,
       "longitude":     121.110300,
-      "region":        "CALABARZON",
-      "province":      "LAGUNA",
-      "city":          "STA. ROSA",
-      "barangay_code": "043428002",
       "barangay_name": "Tagapo"
     }
   ],
@@ -246,12 +319,12 @@ Use this when the user selects an existing node from the node list.
       "strand_length":  50.5,
       "number_of_runs": 1,
       "components": {
-        "node": 2,
-        "amplifier": 1,
-        "extender": 0,
-        "tsc": 1,
+        "node":        2,
+        "amplifier":   1,
+        "extender":    0,
+        "tsc":         1,
         "powersupply": 0,
-        "ps_housing": 0
+        "ps_housing":  0
       }
     },
     {
@@ -260,25 +333,167 @@ Use this when the user selects an existing node from the node list.
       "strand_length":  45.0,
       "number_of_runs": 2,
       "components": {
-        "node": 1,
-        "amplifier": 0,
-        "extender": 1,
-        "tsc": 0,
+        "node":        1,
+        "amplifier":   0,
+        "extender":    1,
+        "tsc":         0,
         "powersupply": 1,
-        "ps_housing": 1
+        "ps_housing":  1
       }
     }
   ]
 }
 ```
 
+**Result of this import:**
+
+- `PL-001`: `barangay_name = Balibago`
+- `PL-002`: `barangay_name = Balibago`
+- `PL-003`: `barangay_name = Tagapo`
+- Node `barangay_name` = `Balibago` (majority: 2 vs 1)
+- Span 1 `expected_cable` = `50.5 × 1 = 50.5`
+- Span 2 `expected_cable` = `45.0 × 2 = 90.0`
+
+---
+
+## Import — Response `201`
+
+```json
+{
+  "message": "AsBuilt import completed.",
+  "data": {
+    "node": {
+      "id":           10,
+      "node_id":      "TY1401",
+      "name":         "MONTEVISTA SUBD.",
+      "region":       "CALABARZON",
+      "province":     "LAGUNA",
+      "city":         "STA. ROSA",
+      "barangay_name":"Balibago",
+      "report_type":  "full_report",
+      "source_file":  "asbuilt"
+    },
+    "poles_created": ["PL-001", "PL-002", "PL-003"],
+    "poles_updated": [],
+    "spans_created": ["PL-001 → PL-002", "PL-002 → PL-003"],
+    "spans_updated": [],
+    "total_poles":   3,
+    "total_spans":   2,
+    "errors":        []
+  }
+}
+```
+
+> **Note:** If the `from_pole_code` or `to_pole_code` of a span is not found in the `poles` list, that span is skipped and an error message is added to `errors[]`. Other spans still save successfully.
+
+---
+
+### 4. Import File Upload
+
+```
+POST /api/v1/asbuilt/import
+Content-Type: multipart/form-data
+```
+
+Upload the export as a `.json` file. The file must contain the same structure as the JSON body above.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | `.json` file | Must include all required fields: `node_id`, `node_name`, `area_id`, `poles`, `spans` |
+
+Accepted MIME types: `application/json`, `text/plain`, `text/json`
+
+---
+
+### 5. Verify Node State
+
+```
+GET /api/v1/asbuilt/node/{nodeId}
+```
+
+Check what was imported. `{nodeId}` is the **integer database ID** from `skycable_nodes.id` — use `data.node.id` from the import response.
+
+**Response `200`:**
+
+```json
+{
+  "node": {
+    "id":          10,
+    "node_id":     "TY1401",
+    "name":        "MONTEVISTA SUBD.",
+    "area":        "NCR",
+    "region":      "CALABARZON",
+    "province":    "LAGUNA",
+    "city":        "STA. ROSA",
+    "barangay":    "Balibago",
+    "report_type": "full_report",
+    "source_file": "asbuilt",
+    "status":      "pending"
+  },
+  "poles": [
+    {
+      "skycable_pole_id": 1,
+      "pole_id":          1,
+      "pole_code":        "PL-001",
+      "sequence":         1,
+      "latitude":         14.539770,
+      "longitude":        121.109219,
+      "status":           "pending",
+      "date_start":       null,
+      "finished_at":      null,
+      "duration":         null
+    }
+  ],
+  "spans": [
+    {
+      "span_id":        1,
+      "from_pole_code": "PL-001",
+      "to_pole_code":   "PL-002",
+      "strand_length":  50.5,
+      "number_of_runs": 1,
+      "expected_cable": 50.5,
+      "status":         "pending",
+      "components": {
+        "node":        2,
+        "amplifier":   1,
+        "extender":    0,
+        "tsc":         1,
+        "powersupply": 0,
+        "ps_housing":  0
+      }
+    }
+  ]
+}
+```
+
+> **Note on node response key:** The node's barangay is returned as `"barangay"` (not `"barangay_name"`) in this endpoint.
+
+---
+
+## Barangay Majority Logic
+
+The node's `barangay_name` is automatically set to the most frequently appearing `barangay_name` across all poles in the import.
+
+Example:
+
+```
+PL-001 → Balibago
+PL-002 → Balibago
+PL-003 → Tagapo
+```
+
+Result:
+
+```
+Balibago appears 2 times
+Tagapo   appears 1 time
+
+Node barangay_name = Balibago
+```
+
 ---
 
 ## Manual Node Creation Flow
-
-Use this flow when the user wants to manually create a node under a selected area.
-
----
 
 ### Step 1 — Get All Areas
 
@@ -289,7 +504,8 @@ GET /api/v1/asbuilt/sites
 Display all areas on the screen.
 
 ```js
-const areas = await GET('/asbuilt/sites')
+const sitesRes = await fetch(`${BASE_URL}/asbuilt/sites`, { headers })
+const areas    = await sitesRes.json()
 
 areas.forEach(area => {
   displayAreaCard({
@@ -298,16 +514,6 @@ areas.forEach(area => {
     node_count: area.node_count
   })
 })
-```
-
-Example UI:
-
-```txt
-NCR
-North Luzon
-South Luzon
-Visayas
-Mindanao
 ```
 
 ---
@@ -323,9 +529,8 @@ GET /api/v1/asbuilt/sites/{areaId}/nodes
 ```js
 const selectedArea = area
 
-const response = await GET(`/asbuilt/sites/${selectedArea.id}/nodes`)
-
-const nodes = response.nodes
+const response  = await fetch(`${BASE_URL}/asbuilt/sites/${selectedArea.id}/nodes`, { headers })
+const { nodes } = await response.json()
 
 nodes.forEach(node => {
   displayNodeOption({
@@ -344,7 +549,7 @@ nodes.forEach(node => {
 
 After selecting an area, the user must have two options:
 
-```txt
+```
 Option 1: Select Existing Node
 Option 2: Add Node Manually
 ```
@@ -373,27 +578,25 @@ If the user clicks **Add Node Manually**, display a form input.
 
 ### Manual Node Form Fields
 
-```txt
-Node ID
-Node Name
-Region
-Province
-City
-Barangay Code
-Barangay Name
+```
+Node ID       (required)
+Node Name     (required)
+Region        (optional)
+Province      (optional)
+City          (optional)
+Barangay Name (optional)
 ```
 
 Example form value:
 
 ```json
 {
-  "node_id": "TY1501",
-  "node_name": "BRGY. BALIBAGO NODE",
-  "region": "CALABARZON",
-  "province": "LAGUNA",
-  "city": "STA. ROSA",
-  "barangay_code": "043428001",
-  "barangay_name": "Balibago"
+  "node_id":      "TY1501",
+  "node_name":    "BRGY. BALIBAGO NODE",
+  "region":       "CALABARZON",
+  "province":     "LAGUNA",
+  "city":         "STA. ROSA",
+  "barangay_name":"Balibago"
 }
 ```
 
@@ -401,27 +604,18 @@ Frontend form state:
 
 ```js
 const manualNode = {
-  node_id: form.node_id,
-  name: form.node_name,
-  region: form.region,
-  province: form.province,
-  city: form.city,
-  barangay_code: form.barangay_code,
-  barangay_name: form.barangay_name
+  node_id:      form.node_id,
+  name:         form.node_name,
+  region:       form.region,
+  province:     form.province,
+  city:         form.city,
+  barangay_name:form.barangay_name
 }
 ```
 
-Important:
-
-```txt
-Manual node creation uses the same POST /asbuilt/import endpoint.
-
-If the node_id does not exist yet inside the selected area_id,
-the backend will create the node automatically.
-
-If the node_id already exists inside the selected area_id,
-the backend will update that node.
-```
+> Manual node creation uses the same `POST /asbuilt/import` endpoint.  
+> If the `node_id` does not exist yet inside the selected `area_id`, the backend creates the node automatically.  
+> If the `node_id` already exists inside the selected `area_id`, the backend updates that node.
 
 ---
 
@@ -436,129 +630,64 @@ POST /api/v1/asbuilt/import
 Content-Type: application/json
 ```
 
----
-
 ### Frontend Payload Builder
 
 ```js
-const targetNode = selectedNode || manualNode
+// ── API config ────────────────────────────────────────────────────────────────
+const BASE_URL = 'https://quack-useable-thesaurus.ngrok-free.dev/api/v1'
+const API_KEY  = 'asbuilt-iq-secret-key-2026'
 
-const areaData = {
-  region: manualNode?.region || selectedArea.region,
-  province: manualNode?.province || selectedArea.province,
-  city: manualNode?.city || selectedArea.city,
-  barangay_code: manualNode?.barangay_code || selectedArea.barangay_code,
-  barangay_name: manualNode?.barangay_name || selectedArea.barangay_name
+const headers = {
+  'Content-Type': 'application/json',
+  'X-AsBuilt-Key': API_KEY,
+  'ngrok-skip-browser-warning': '1'
 }
 
+// ── Build and send payload ────────────────────────────────────────────────────
+const targetNode = selectedNode || manualNode
+
 const payload = {
-  node_id: targetNode.node_id,
+  node_id:   targetNode.node_id,
   node_name: targetNode.name,
+  area_id:   selectedArea.id,
 
-  area_id: selectedArea.id,
-
-  region: areaData.region,
-  province: areaData.province,
-  city: areaData.city,
-  barangay_code: areaData.barangay_code,
-  barangay_name: areaData.barangay_name,
+  // Optional node location fields
+  region:   manualNode?.region   || selectedArea.region   || '',
+  province: manualNode?.province || selectedArea.province || '',
+  city:     manualNode?.city     || selectedArea.city     || '',
 
   poles: uploadedPoles.map(pole => ({
-    pole_code: pole.pole_code,
-    latitude: pole.latitude,
-    longitude: pole.longitude,
-
-    // Automatically attach area data to every pole
-    region: pole.region || areaData.region,
-    province: pole.province || areaData.province,
-    city: pole.city || areaData.city,
-    barangay_code: pole.barangay_code || areaData.barangay_code,
-    barangay_name: pole.barangay_name || areaData.barangay_name
+    pole_code:     pole.pole_code,
+    latitude:      pole.latitude  ?? null,
+    longitude:     pole.longitude ?? null,
+    barangay_name: pole.barangay_name ?? null
   })),
 
   spans: uploadedSpans.map(span => ({
     from_pole_code: span.from_pole_code,
-    to_pole_code: span.to_pole_code,
-    strand_length: span.strand_length,
-    number_of_runs: span.number_of_runs || 1,
+    to_pole_code:   span.to_pole_code,
+    strand_length:  span.strand_length  ?? null,
+    number_of_runs: span.number_of_runs ?? 1,
     components: {
-      node: span.components?.node || 0,
-      amplifier: span.components?.amplifier || 0,
-      extender: span.components?.extender || 0,
-      tsc: span.components?.tsc || 0,
-      powersupply: span.components?.powersupply || 0,
-      ps_housing: span.components?.ps_housing || 0
+      node:        span.components?.node        ?? 0,
+      amplifier:   span.components?.amplifier   ?? 0,
+      extender:    span.components?.extender    ?? 0,
+      tsc:         span.components?.tsc         ?? 0,
+      powersupply: span.components?.powersupply ?? 0,
+      ps_housing:  span.components?.ps_housing  ?? 0
     }
   }))
 }
 
-await POST('/asbuilt/import', payload)
-```
-
----
-
-## Automatic Pole Area Data
-
-Every uploaded pole must automatically include the area data from the selected area or manual node form.
-
-Required area fields to include in every pole:
-
-```txt
-barangay_code
-region
-province
-city
-barangay_name
-```
-
-Example pole data after automatic area mapping:
-
-```json
-{
-  "pole_code": "PL-001",
-  "latitude": 14.539770,
-  "longitude": 121.109219,
-  "region": "CALABARZON",
-  "province": "LAGUNA",
-  "city": "STA. ROSA",
-  "barangay_code": "043428001",
-  "barangay_name": "Balibago"
-}
-```
-
-Tagalog note:
-
-```txt
-Pag upload ng poles, dapat kita agad yung area data.
-
-Kung anong barangay yung selected area or manual node form,
-automatic yun na ang barangay ng poles.
-
-Kung majority ng uploaded poles ay nasa isang barangay,
-automatic yun ang magiging barangay_name ng node.
-```
-
----
-
-## Barangay Majority Logic
-
-The node's `barangay_name` is automatically set to the most frequently appearing `barangay_name` across all poles in the import.
-
-Example:
-
-```txt
-PL-001 → Balibago
-PL-002 → Balibago
-PL-003 → Tagapo
-```
-
-Result:
-
-```txt
-Balibago appears 2 times
-Tagapo appears 1 time
-
-Node barangay_name = Balibago
+// ── POST to backend (local Wi-Fi) ─────────────────────────────────────────────
+const res = await fetch(`${BASE_URL}/asbuilt/import`, {
+  method:  'POST',
+  headers: headers,
+  body:    JSON.stringify(payload)
+})
+const importResponse = await res.json()
+// importResponse.data.node.id = integer DB id — use for verify call
+console.log('Import result:', importResponse)
 ```
 
 ---
@@ -568,8 +697,6 @@ Node barangay_name = Balibago
 After successful import, use the integer database node ID from the import response.
 
 ```js
-const importResponse = await POST('/asbuilt/import', payload)
-
 const nodeDatabaseId = importResponse.data.node.id
 ```
 
@@ -580,205 +707,46 @@ GET /api/v1/asbuilt/node/{nodeId}
 ```
 
 ```js
-const nodeState = await GET(`/asbuilt/node/${nodeDatabaseId}`)
+const verifyRes = await fetch(`${BASE_URL}/asbuilt/node/${nodeDatabaseId}`, {
+  headers: { 'X-AsBuilt-Key': API_KEY }
+})
+const nodeState = await verifyRes.json()
 
 displayNodeDetails(nodeState.node)
 displayPoles(nodeState.poles)
 displaySpans(nodeState.spans)
 ```
 
-The verify endpoint returns:
-
-```txt
-Node details
-Uploaded poles
-Uploaded spans
-```
-
 ---
 
 ## Final UI Flow
 
-```txt
-1. GET all areas
-2. Display all areas using forEach
-3. User clicks an area
-4. GET all nodes under selected area
-5. Display existing nodes
-6. User chooses either:
-      A. Select existing node
-      B. Add node manually
-7. If manual, display node form:
-      - node_id
-      - node_name
-      - region
-      - province
-      - city
-      - barangay_code
-      - barangay_name
-8. User uploads poles and spans
-9. System automatically adds area data to every pole:
-      - barangay_code
-      - region
-      - province
-      - city
-      - barangay_name
+```
+1.  GET all areas
+2.  Display all areas using forEach
+3.  User clicks an area
+4.  GET all nodes under selected area
+5.  Display existing nodes
+6.  User chooses either:
+       A. Select existing node
+       B. Add node manually
+7.  If manual, display node form:
+       - node_id        (required)
+       - node_name      (required)
+       - region         (optional)
+       - province       (optional)
+       - city           (optional)
+       - barangay_name  (optional)
+8.  User uploads poles and spans
+9.  Each span must reference pole_code values that exist in the poles array
 10. User clicks Post
 11. POST data to /asbuilt/import using the selected/manual node_id
 12. Backend creates or updates the node
 13. Backend saves poles and spans under that specific node_id
-14. GET /asbuilt/node/{nodeId}
-15. Display all uploaded poles and spans under that node
-```
-
----
-
-## Import — Fields Reference
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `node_id` | string | ✅ | VARCHAR identifier e.g. `"TY1401"` — maps to `skycable_nodes.node_id` |
-| `node_name` | string | ✅ | Saved to `skycable_nodes.name`, e.g. `"MONTEVISTA SUBD."` |
-| `area_id` | integer | ✅ | From `GET /asbuilt/sites` |
-| `region` | string | ❌ | e.g. `"CALABARZON"` — saved to node |
-| `province` | string | ❌ | e.g. `"LAGUNA"` — saved to node |
-| `city` | string | ❌ | e.g. `"STA. ROSA"` — saved to node |
-| `barangay_code` | string | ❌ | Area barangay code |
-| `barangay_name` | string | ❌ | Node barangay name, can also be computed from majority pole barangay |
-| `poles[].pole_code` | string | ✅ | Stored UPPERCASE |
-| `poles[].latitude` | decimal | ❌ | −90 to 90 — retained as-is |
-| `poles[].longitude` | decimal | ❌ | −180 to 180 — retained as-is |
-| `poles[].region` | string | ❌ | Automatically copied from selected/manual area data |
-| `poles[].province` | string | ❌ | Automatically copied from selected/manual area data |
-| `poles[].city` | string | ❌ | Automatically copied from selected/manual area data |
-| `poles[].barangay_code` | string | ❌ | Automatically copied from selected/manual area data |
-| `poles[].barangay_name` | string | ❌ | Per-pole barangay; node gets the majority value |
-| `spans[].from_pole_code` | string | ✅ | Must be in the `poles` list |
-| `spans[].to_pole_code` | string | ✅ | Must be in the `poles` list |
-| `spans[].strand_length` | decimal | ❌ | Meters |
-| `spans[].number_of_runs` | integer | ❌ | Default: 1 |
-| `spans[].components.node` | integer | ❌ | Default: 0 |
-| `spans[].components.amplifier` | integer | ❌ | Default: 0 |
-| `spans[].components.extender` | integer | ❌ | Default: 0 |
-| `spans[].components.tsc` | integer | ❌ | Default: 0 |
-| `spans[].components.powersupply` | integer | ❌ | Default: 0 |
-| `spans[].components.ps_housing` | integer | ❌ | Default: 0 |
-
-> `expected_cable` = `strand_length × number_of_runs` — auto-computed and saved to `skycable_span_summaries`.
-
----
-
-## Import — Response `201`
-
-```json
-{
-  "message": "AsBuilt import completed.",
-  "data": {
-    "node": {
-      "id":          10,
-      "node_id":     "TY1401",
-      "name":        "MONTEVISTA SUBD.",
-      "region":      "CALABARZON",
-      "province":    "LAGUNA",
-      "city":        "STA. ROSA",
-      "barangay_code": "043428001",
-      "barangay_name": "Balibago",
-      "report_type": "full_report",
-      "source_file": "asbuilt"
-    },
-    "poles_created": ["PL-001", "PL-002", "PL-003"],
-    "poles_updated": [],
-    "spans_created": ["PL-001 → PL-002", "PL-002 → PL-003"],
-    "spans_updated": [],
-    "total_poles":   3,
-    "total_spans":   2,
-    "errors":        []
-  }
-}
-```
-
----
-
-### 4. Import File Upload
-
-```
-POST /api/v1/asbuilt/import
-Content-Type: multipart/form-data
-```
-
-Upload the export as a `.json` file. The file must contain the same structure as the JSON body above.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `file` | `.json` file | Must include all required fields: `node_id`, `node_name`, `area_id`, `poles`, `spans` |
-
----
-
-### 5. Verify Node State
-
-```
-GET /api/v1/asbuilt/node/{nodeId}
-```
-
-Check what was imported. `{nodeId}` is the **integer database ID** from `skycable_nodes.id`.
-
-**Response `200`:**
-
-```json
-{
-  "node": {
-    "id":          10,
-    "node_id":     "TY1401",
-    "name":        "MONTEVISTA SUBD.",
-    "area":        "NCR",
-    "region":      "CALABARZON",
-    "province":    "LAGUNA",
-    "city":        "STA. ROSA",
-    "barangay_code": "043428001",
-    "barangay_name": "Balibago",
-    "report_type": "full_report",
-    "source_file": "asbuilt",
-    "status":      "pending"
-  },
-  "poles": [
-    {
-      "skycable_pole_id": 1,
-      "pole_id":          1,
-      "pole_code":        "PL-001",
-      "sequence":         1,
-      "latitude":         14.539770,
-      "longitude":        121.109219,
-      "region":           "CALABARZON",
-      "province":         "LAGUNA",
-      "city":             "STA. ROSA",
-      "barangay_code":    "043428001",
-      "barangay_name":    "Balibago",
-      "status":           "pending",
-      "date_start":       null,
-      "finished_at":      null,
-      "duration":         null
-    }
-  ],
-  "spans": [
-    {
-      "span_id":        1,
-      "from_pole_code": "PL-001",
-      "to_pole_code":   "PL-002",
-      "strand_length":  50.5,
-      "number_of_runs": 1,
-      "expected_cable": 50.5,
-      "status":         "pending",
-      "components": {
-        "node": 2,
-        "amplifier": 1,
-        "extender": 0,
-        "tsc": 1,
-        "powersupply": 0,
-        "ps_housing": 0
-      }
-    }
-  ]
-}
+14. Node barangay_name is auto-set to the most frequent barangay across poles
+15. expected_cable per span is auto-computed: strand_length × number_of_runs
+16. GET /asbuilt/node/{nodeId}
+17. Display all uploaded poles and spans under that node
 ```
 
 ---
@@ -789,66 +757,108 @@ Check what was imported. `{nodeId}` is the **integer database ID** from `skycabl
 |--------|----------|-------------|
 | `GET` | `/asbuilt/sites` | List all areas |
 | `GET` | `/asbuilt/sites/{areaId}/nodes` | List nodes under an area |
-| `POST` | `/asbuilt/import` | Bulk import, manual node create-or-update, JSON body, or file upload |
+| `POST` | `/asbuilt/import` | Bulk import — JSON body or `.json` file upload |
 | `GET` | `/asbuilt/node/{nodeId}` | Verify node state after import |
+
+---
+
+## Error Handling
+
+| HTTP Status | Meaning |
+|-------------|---------|
+| `201` | Import completed (may include `errors[]` for skipped spans) |
+| `422` | Validation failed — missing `node_id`, `node_name`, `area_id`, or `poles`; or invalid file |
+| `404` | `area_id` not found |
+
+When a span's `from_pole_code` or `to_pole_code` is not found in the `poles` list, that span is **silently skipped** and recorded in `data.errors[]`. The rest of the import still succeeds with a `201`.
+
+```json
+{
+  "message": "AsBuilt import completed.",
+  "data": {
+    "node": { ... },
+    "poles_created": ["PL-001", "PL-002"],
+    "spans_created": [],
+    "total_poles": 2,
+    "total_spans": 0,
+    "errors": [
+      "spans[0]: from_pole_code 'PL-999' not found in poles list"
+    ]
+  }
+}
+```
 
 ---
 
 ## cURL Examples
 
 ```bash
-BASE="https://7a33-112-210-248-33.ngrok-free.app/api/v1"
+# Online (ngrok static domain — use this for employees)
+BASE="https://quack-useable-thesaurus.ngrok-free.dev/api/v1"
 KEY="asbuilt-iq-secret-key-2026"
-NGROK="-H \"ngrok-skip-browser-warning: 1\""
+NGROK="ngrok-skip-browser-warning: 1"
+
+# Local Wi-Fi only (same network as server)
+# BASE="http://192.168.1.17:8080/api/v1"
 
 # 1 — List sites / areas
 curl "$BASE/asbuilt/sites" \
   -H "X-AsBuilt-Key: $KEY" \
-  -H "ngrok-skip-browser-warning: 1"
+  -H "$NGROK"
 
 # 2 — List nodes for NCR, area id = 1
 curl "$BASE/asbuilt/sites/1/nodes" \
   -H "X-AsBuilt-Key: $KEY" \
-  -H "ngrok-skip-browser-warning: 1"
+  -H "$NGROK"
 
 # 3 — Import via JSON body
 curl -X POST "$BASE/asbuilt/import" \
   -H "X-AsBuilt-Key: $KEY" \
-  -H "ngrok-skip-browser-warning: 1" \
+  -H "$NGROK" \
   -H "Content-Type: application/json" \
   -d '{
-    "node_id": "TY1401",
+    "node_id":   "TY1401",
     "node_name": "MONTEVISTA SUBD.",
-    "area_id": 1,
-    "region": "CALABARZON",
-    "province": "LAGUNA",
-    "city": "STA. ROSA",
-    "barangay_code": "043428001",
-    "barangay_name": "Balibago",
+    "area_id":   1,
+    "region":    "CALABARZON",
+    "province":  "LAGUNA",
+    "city":      "STA. ROSA",
     "poles": [
       {
         "pole_code": "PL-001",
-        "latitude": 14.53977,
+        "latitude":  14.53977,
         "longitude": 121.10921,
-        "region": "CALABARZON",
-        "province": "LAGUNA",
-        "city": "STA. ROSA",
-        "barangay_code": "043428001",
+        "barangay_name": "Balibago"
+      },
+      {
+        "pole_code": "PL-002",
+        "latitude":  14.54010,
+        "longitude": 121.10980,
         "barangay_name": "Balibago"
       }
     ],
-    "spans": []
+    "spans": [
+      {
+        "from_pole_code": "PL-001",
+        "to_pole_code":   "PL-002",
+        "strand_length":  50.5,
+        "number_of_runs": 1,
+        "components": {
+          "node": 2, "amplifier": 1, "extender": 0,
+          "tsc": 1, "powersupply": 0, "ps_housing": 0
+        }
+      }
+    ]
   }'
 
 # 4 — Import via file upload
 curl -X POST "$BASE/asbuilt/import" \
   -H "X-AsBuilt-Key: $KEY" \
-  -H "ngrok-skip-browser-warning: 1" \
+  -H "$NGROK" \
   -F "file=@export.json"
 
-# 5 — Verify node state
-# Use the integer database id from the import response
+# 5 — Verify node state (use integer id from import response)
 curl "$BASE/asbuilt/node/10" \
   -H "X-AsBuilt-Key: $KEY" \
-  -H "ngrok-skip-browser-warning: 1"
+  -H "$NGROK"
 ```

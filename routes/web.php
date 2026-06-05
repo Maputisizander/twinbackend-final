@@ -6,6 +6,10 @@ Route::get('/', function () {
     return view('welcome');
 });
 
+Route::get('/apiconsumption', function () {
+    return view('apiconsumption');
+});
+
 Route::get('/apistatus', function () {
     $dbStatus = 'Unknown';
     $dbError = null;

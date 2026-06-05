@@ -9,15 +9,37 @@ use App\Http\Controllers\Api;
 |--------------------------------------------------------------------------
 */
 
-// Single health-check endpoint. /v1/ping was a duplicate (routing prefix already adds /api/v1).
+// Single health-check endpoint.
 Route::get('/ping', fn () => response()->json(['status' => 'ok', 'version' => 'v1']));
+
+// ── API monitoring (no auth — internal use) ───────────────────────────────────
+Route::get('/apistatus',              [Api\ApiStatusController::class, 'status']);
+Route::get('/apiconsumption',         [Api\ApiStatusController::class, 'consumption']);
+Route::delete('/apiconsumption/reset',[Api\ApiStatusController::class, 'reset']);
 
 // ── Public file serving (no auth — images embedded in reports) ────────────────
 Route::get('/files/{path}', function (string $path) {
-    if (str_contains($path, '..')) abort(403);
-    if (\Illuminate\Support\Facades\Storage::disk('public')->exists($path)) {
-        return \Illuminate\Support\Facades\Storage::disk('public')->response($path);
+    $candidates = array_unique([
+        $path,
+        rawurldecode($path),
+        urldecode($path),
+        ltrim(rawurldecode($path), '/\\'),
+    ]);
+
+    foreach ($candidates as $candidate) {
+        $candidate = str_replace('\\', '/', $candidate);
+        if (str_contains($candidate, '..')) abort(403);
+
+        if (\Illuminate\Support\Facades\Storage::disk('public')->exists($candidate)) {
+            return \Illuminate\Support\Facades\Storage::disk('public')->response($candidate);
+        }
+
+        $absolute = storage_path('app/public/' . $candidate);
+        if (is_file($absolute)) {
+            return response()->file($absolute);
+        }
     }
+
     abort(404);
 })->where('path', '.*');
 
@@ -40,9 +62,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('nodes/map-pins', [Api\Skycable\NodeController::class, 'mapPins']);
     
     // Unified Teardown Image Uploads
-    Route::post('teardown/upload-image', [Api\TeardownImageController::class, 'upload']);
-    Route::get('teardown/node-images/{nodeId}', [Api\TeardownImageController::class, 'fetchByNode']);
-    Route::get('teardown/report-images/{reportId}', [Api\TeardownImageController::class, 'fetchByReport']);
+    Route::post('teardown/upload-image',                      [Api\TeardownImageController::class, 'upload']);
+    Route::get('teardown/node-images/{nodeId}',               [Api\TeardownImageController::class, 'fetchByNode']);
+    Route::get('teardown/report-images/{reportId}',           [Api\TeardownImageController::class, 'fetchByReport']);
+    Route::get('teardown/pole-images/{poleId}',               [Api\TeardownImageController::class, 'fetchByPole']);
+    Route::patch('teardown/images/{image}/lock',              [Api\TeardownImageController::class, 'lock']);
+    Route::patch('teardown/images/{image}/unlock',            [Api\TeardownImageController::class, 'unlock']);
 });
 
 // ── TelcoVantage Admin ────────────────────────────────────────────────────────
@@ -167,13 +192,17 @@ Route::prefix('skycable')->middleware(['auth:sanctum', 'company:skycable'])->gro
     Route::get('pole-teardown-logs/pole/{poleId}', [Api\Skycable\PoleTeardownLogController::class, 'byPole']);
 
     // Spans
+    Route::get('spans/stats',                      [Api\Skycable\SpanController::class, 'stats']);
     Route::get('spans',                            [Api\Skycable\SpanController::class, 'index']);
     Route::post('spans',                           [Api\Skycable\SpanController::class, 'store']);
     Route::get('spans/{span}',                     [Api\Skycable\SpanController::class, 'show']);
     Route::put('spans/{span}',                     [Api\Skycable\SpanController::class, 'update']);
+    Route::patch('spans/{span}',                   [Api\Skycable\SpanController::class, 'update']);
+    Route::patch('spans/{span}/status',            [Api\Skycable\SpanController::class, 'updateStatus']);
     Route::delete('spans/{span}',                  [Api\Skycable\SpanController::class, 'destroy']);
     Route::put('spans/{span}/components',          [Api\Skycable\SpanController::class, 'updateComponents']);
     Route::post('spans/{span}/split',              [Api\Skycable\SpanController::class, 'split']);
+    Route::get('nodes/{node}/spans',               [Api\Skycable\SpanController::class, 'byNode']);
 
     // Teardown Reports
     Route::get('teardowns',                        [Api\Skycable\TeardownController::class, 'index']);
@@ -202,6 +231,7 @@ Route::prefix('skycable')->middleware(['auth:sanctum', 'company:skycable'])->gro
     Route::get('warehouse-receipts/{receipt}',            [Api\Skycable\WarehouseController::class, 'showReceipt']);
     Route::put('warehouse-receipts/{receipt}/approve',    [Api\Skycable\WarehouseController::class, 'approveReceipt']);
     Route::put('warehouse-receipts/{receipt}/arrive',     [Api\Skycable\WarehouseController::class, 'arrive']);
+    Route::put('warehouse-receipts/{receipt}/start-unload',[Api\Skycable\WarehouseController::class, 'startUnload']);
     Route::post('warehouse-receipts/{receipt}/verify',    [Api\Skycable\WarehouseController::class, 'verifyAndApprove']);
 
     // Pickup Requests & Deliveries
@@ -213,7 +243,22 @@ Route::prefix('skycable')->middleware(['auth:sanctum', 'company:skycable'])->gro
     Route::put('deliveries/{delivery}/accept',           [Api\Skycable\DeliveryController::class, 'accept']);
     Route::get('pull-out-requests',                      [Api\Skycable\DeliveryController::class, 'pullOutRequests']);
     Route::post('pull-out-requests',                     [Api\Skycable\DeliveryController::class, 'createPullOut']);
-    Route::put('pull-out-requests/{pullOutRequest}/approve',[Api\Skycable\DeliveryController::class, 'approvePullOut']);
+    Route::put('pull-out-requests/{pullOutRequest}/approve',  [Api\Skycable\DeliveryController::class, 'approvePullOut']);
+    Route::get('pull-out-requests/{pullOutRequest}/delivery', [Api\Skycable\DeliveryController::class, 'pullOutDelivery']);
+    Route::put('deliveries/{delivery}/assign-driver',         [Api\Skycable\DeliveryController::class, 'assignDriver']);
+    Route::post('deliveries/{delivery}/start',                [Api\Skycable\DeliveryController::class, 'startDelivery']);
+    Route::post('deliveries/{delivery}/arrive',               [Api\Skycable\DeliveryController::class, 'arrive']);
+    Route::get('deliveries/incoming/{warehouseId}',           [Api\Skycable\DeliveryController::class, 'incomingDeliveries']);
+    Route::get('deliveries/{delivery}/tracking',              [Api\Skycable\DeliveryController::class, 'tracking']);
+    Route::get('driver/deliveries',                           [Api\Skycable\DeliveryController::class, 'driverDeliveries']);
+    Route::get('drivers',                                     [Api\Skycable\DeliveryController::class, 'drivers']);
+    Route::put('users/{user}/toggle-driver',                  [Api\Skycable\DeliveryController::class, 'toggleDriverRole']);
+
+    // Notifications
+    Route::get('notifications',              [Api\Skycable\NotificationController::class, 'index']);
+    Route::get('notifications/unread-count', [Api\Skycable\NotificationController::class, 'unreadCount']);
+    Route::post('notifications/read-all',    [Api\Skycable\NotificationController::class, 'markAllRead']);
+    Route::post('notifications/{notification}/read', [Api\Skycable\NotificationController::class, 'markRead']);
 
     // Lineman live location (mobile → backend → web dashboard)
     Route::post('lineman/location',  [Api\Skycable\LinemanLocationController::class, 'store']);
@@ -254,6 +299,7 @@ Route::prefix('globe')->middleware(['auth:sanctum', 'company:globe'])->group(fun
     Route::get('poles/{pole}', [Api\Globe\PoleController::class, 'show']);
 
     // NAP Boxes & Ports
+    Route::get('nap-boxes',                           [Api\Globe\NapBoxController::class, 'index']); // all nap boxes (no pole filter)
     Route::get('poles/{pole}/nap-boxes',              [Api\Globe\NapBoxController::class, 'index']);
     Route::post('nap-boxes',                          [Api\Globe\NapBoxController::class, 'store']);
     Route::get('nap-boxes/{napBox}',                  [Api\Globe\NapBoxController::class, 'show']);

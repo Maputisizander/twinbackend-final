@@ -5,16 +5,21 @@ namespace App\Http\Controllers\Api\Skycable;
 use App\Http\Concerns\StoresPhotos;
 use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
+use App\Models\LinemanLocation;
 use App\Models\Warehouse;
 use App\Models\WarehouseReceipt;
 use App\Models\WarehouseReceiptItem;
+use App\Models\WarehouseReceiptSource;
 use App\Models\WarehouseStock;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class WarehouseController extends Controller
 {
     use StoresPhotos;
+
+    private const ARRIVAL_RADIUS_METERS = 150;
     public function index(Request $request)
     {
         $user = $request->user();
@@ -74,16 +79,18 @@ class WarehouseController extends Controller
     public function receiveStock(Request $request)
     {
         $data = $request->validate([
-            'warehouse_id'     => 'required|exists:warehouses,id',
-            'subcontractor_id' => 'nullable|exists:subcontractors,id',
-            'node_id'          => 'nullable|exists:skycable_nodes,id',
-            'receipt_date'     => 'required|date',
-            'items'            => 'required|array|min:1',
-            'items.*.item_type' => 'required|string',
-            'items.*.quantity'  => 'required|numeric|min:0.01',
-            'items.*.unit'      => 'nullable|string',
-            'submitted_lat'    => 'nullable|numeric|between:-90,90',
-            'submitted_lng'    => 'nullable|numeric|between:-180,180',
+            'warehouse_id'          => 'required|exists:warehouses,id',
+            'subcontractor_id'      => 'nullable|exists:subcontractors,id',
+            'node_id'               => 'nullable|exists:skycable_nodes,id',
+            'receipt_date'          => 'required|date',
+            'items'                 => 'required|array|min:1',
+            'items.*.item_type'     => 'required|string',
+            'items.*.quantity'      => 'required|numeric|min:0.01',
+            'items.*.unit'          => 'nullable|string',
+            'submitted_lat'         => 'nullable|numeric|between:-90,90',
+            'submitted_lng'         => 'nullable|numeric|between:-180,180',
+            'teardown_local_ids'    => 'nullable|array',
+            'teardown_local_ids.*'  => 'string|max:64',
         ]);
 
         $receipt = DB::transaction(function () use ($request, $data) {
@@ -102,6 +109,16 @@ class WarehouseController extends Controller
                 WarehouseReceiptItem::create(array_merge($item, ['receipt_id' => $receipt->id]));
             }
 
+            // Store provenance — link original teardown tokens to this receipt
+            foreach (array_unique($data['teardown_local_ids'] ?? []) as $localId) {
+                if ($localId) {
+                    WarehouseReceiptSource::firstOrCreate([
+                        'receipt_id'        => $receipt->id,
+                        'teardown_local_id' => $localId,
+                    ]);
+                }
+            }
+
             AuditLog::record('create', $receipt, null, $receipt->toArray());
             return $receipt;
         });
@@ -111,7 +128,9 @@ class WarehouseController extends Controller
 
     public function showReceipt(WarehouseReceipt $receipt)
     {
-        return response()->json($receipt->load(['items', 'receivedBy', 'approvedBy', 'node', 'warehouse']));
+        return response()->json($this->withLiveLocation(
+            $receipt->load(['items', 'receivedBy', 'approvedBy', 'node', 'warehouse'])
+        ));
     }
 
     public function approveReceipt(Request $request, WarehouseReceipt $receipt)
@@ -155,26 +174,54 @@ class WarehouseController extends Controller
             return response()->json(['message' => 'Receipt is not in pending status.'], 422);
         }
 
+        if (! $this->receiptLinemanIsInsideWarehouseZone($receipt)) {
+            return response()->json(['message' => 'Lineman must be inside the warehouse arrival zone before this receipt can be marked as arrived.'], 422);
+        }
+
         $old = $receipt->toArray();
         $receipt->status = 'arrived';
         $receipt->save();
         AuditLog::record('update', $receipt, $old, $receipt->fresh()->toArray());
 
-        return response()->json($receipt->fresh()->load(['items', 'receivedBy', 'node', 'warehouse']));
+        return response()->json($this->withLiveLocation(
+            $receipt->fresh()->load(['items', 'receivedBy', 'node', 'warehouse'])
+        ));
+    }
+
+    /**
+     * Warehouse in-charge starts physical unloading.
+     * Status: arrived → unloading
+     *
+     * PUT /skycable/warehouse-receipts/{receipt}/start-unload
+     */
+    public function startUnload(WarehouseReceipt $receipt)
+    {
+        if ($receipt->status !== 'arrived') {
+            return response()->json(['message' => 'Receipt must be arrived before unloading.'], 422);
+        }
+
+        $old = $receipt->toArray();
+        $receipt->status = 'unloading';
+        $receipt->save();
+        AuditLog::record('update', $receipt, $old, $receipt->fresh()->toArray());
+
+        return response()->json($this->withLiveLocation(
+            $receipt->fresh()->load(['items', 'receivedBy', 'node', 'warehouse'])
+        ));
     }
 
     /**
      * Warehouse in-charge verifies actual quantities, optionally adjusts them,
      * attaches a proof image, then approves the receipt and increments stock.
-     * Status: arrived → approved
+     * Status: unloading → approved
      *
      * POST /skycable/warehouse-receipts/{receipt}/verify
      * multipart/form-data: items[0][item_type], items[0][quantity], proof_image (required)
      */
     public function verifyAndApprove(Request $request, WarehouseReceipt $receipt)
     {
-        if ($receipt->status !== 'arrived') {
-            return response()->json(['message' => 'Receipt must be marked as arrived before approving.'], 422);
+        if (! in_array($receipt->status, ['arrived', 'unloading'], true)) {
+            return response()->json(['message' => 'Receipt must be unloading before approving.'], 422);
         }
 
         $request->validate([
@@ -197,10 +244,13 @@ class WarehouseController extends Controller
                 }
             }
 
-            // Store proof image
+            // Store proof image under warehouse-proof/{node-slug}/{receipt-id}/{user-id}.jpg
             $proofPath = null;
             if ($request->hasFile('proof_image')) {
-                $proofPath = $this->storePhoto($request->file('proof_image'), 'warehouse-proofs');
+                $receipt->loadMissing('node');
+                $nodeSlug   = Str::slug($receipt->node?->name ?? 'unknown');
+                $customPath = "warehouse-proof/{$nodeSlug}/{$receipt->id}/{$request->user()->id}.jpg";
+                $proofPath  = $this->storePhoto($request->file('proof_image'), 'warehouse-proof', 1280, $customPath);
             }
 
             $receipt->update([
@@ -221,7 +271,64 @@ class WarehouseController extends Controller
 
         AuditLog::record('update', $receipt, $old, $receipt->fresh()->toArray());
 
-        return response()->json($receipt->fresh()->load(['items', 'receivedBy', 'approvedBy']));
+        return response()->json($this->withLiveLocation(
+            $receipt->fresh()->load(['items', 'receivedBy', 'approvedBy'])
+        ));
+    }
+
+    private function withLiveLocation(WarehouseReceipt $receipt): WarehouseReceipt
+    {
+        $location = $receipt->received_by
+            ? LinemanLocation::where('user_id', $receipt->received_by)->first()
+            : null;
+
+        $receipt->setAttribute('live_location', $location ? [
+            'lat'       => (float) $location->latitude,
+            'lng'       => (float) $location->longitude,
+            'accuracy'  => $location->accuracy !== null ? (float) $location->accuracy : null,
+            'pinged_at' => $location->pinged_at?->toIso8601String(),
+        ] : null);
+
+        return $receipt;
+    }
+
+    private function receiptLinemanIsInsideWarehouseZone(WarehouseReceipt $receipt): bool
+    {
+        if (! $receipt->received_by) {
+            return false;
+        }
+
+        $receipt->loadMissing('warehouse');
+        $warehouse = $receipt->warehouse;
+        if (! $warehouse || $warehouse->lat === null || $warehouse->lng === null) {
+            return false;
+        }
+
+        $location = LinemanLocation::where('user_id', $receipt->received_by)->first();
+        if (! $location) {
+            return false;
+        }
+
+        return $this->distanceMeters(
+            (float) $location->latitude,
+            (float) $location->longitude,
+            (float) $warehouse->lat,
+            (float) $warehouse->lng
+        ) <= self::ARRIVAL_RADIUS_METERS;
+    }
+
+    private function distanceMeters(float $fromLat, float $fromLng, float $toLat, float $toLng): float
+    {
+        $earthRadiusM = 6371000;
+        $dLat = deg2rad($toLat - $fromLat);
+        $dLng = deg2rad($toLng - $fromLng);
+        $lat1 = deg2rad($fromLat);
+        $lat2 = deg2rad($toLat);
+
+        $a = sin($dLat / 2) ** 2
+            + cos($lat1) * cos($lat2) * sin($dLng / 2) ** 2;
+
+        return $earthRadiusM * 2 * atan2(sqrt($a), sqrt(1 - $a));
     }
 
     public function stocks(Warehouse $warehouse)

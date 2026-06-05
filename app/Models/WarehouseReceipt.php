@@ -19,5 +19,6 @@ class WarehouseReceipt extends Model
     public function node()          { return $this->belongsTo(SkycableNode::class, 'node_id'); }
     public function receivedBy()    { return $this->belongsTo(User::class, 'received_by'); }
     public function approvedBy()    { return $this->belongsTo(User::class, 'approved_by'); }
-    public function items()         { return $this->hasMany(WarehouseReceiptItem::class, 'receipt_id'); }
+    public function items()   { return $this->hasMany(WarehouseReceiptItem::class, 'receipt_id'); }
+    public function sources() { return $this->hasMany(WarehouseReceiptSource::class, 'receipt_id'); }
 }

@@ -96,11 +96,38 @@ class AsBuiltController extends Controller
             // ── 1. Upsert Poles ──────────────────────────────────────────────
             $maxSeq = SkycablePole::where('node_id', $node->id)->max('sequence') ?? 0;
 
+            // Pre-count pole_code occurrences to detect indexed names (NPT-1, NPT-2…)
+            // pole_label = base name before the trailing "-N" suffix
+            // label_index = the N suffix if present, null if the name is unique
+            $poleCodeCounts = array_count_values(
+                array_map(fn($p) => strtoupper(trim($p['pole_code'] ?? '')), $request->poles)
+            );
+
             foreach ($request->poles as $idx => $poleData) {
                 $code = strtoupper(trim($poleData['pole_code']));
                 if (! $code) {
                     $errors[] = "poles[{$idx}]: pole_code is empty";
                     continue;
+                }
+
+                // Derive pole_label and label_index from the code.
+                // Pattern: "NPT-2" → label="NPT", index=2
+                //           "NPT"   → label="NPT", index=null (unique)
+                //           "TY-001"→ label="TY-001", index=null (not an indexed duplicate)
+                $poleLabel = $code;
+                $labelIndex = null;
+                if (preg_match('/^(.+)-(\d+)$/', $code, $m)) {
+                    $baseCode = $m[1];
+                    $suffix   = (int) $m[2];
+                    // Only treat as indexed if the base name alone also appears
+                    // OR other "-N" variants appear (i.e. it looks intentionally indexed)
+                    $siblingPattern = $baseCode . '-';
+                    $hasSiblings = collect(array_keys($poleCodeCounts))
+                        ->contains(fn($c) => str_starts_with($c, $siblingPattern) && $c !== $code);
+                    if ($hasSiblings || isset($poleCodeCounts[$baseCode])) {
+                        $poleLabel  = $baseCode;
+                        $labelIndex = $suffix;
+                    }
                 }
 
                 $lat = $this->normalizeCoordinate($poleData['latitude'] ?? null);
@@ -117,6 +144,11 @@ class AsBuiltController extends Controller
                 if ($skycablePole) {
                     $pole = $this->preparePoleForNodeImport($skycablePole, $code, $lat, $lng);
 
+                    // Update label/index if not yet set
+                    if (! $pole->pole_label) {
+                        $pole->update(['pole_label' => $poleLabel, 'label_index' => $labelIndex]);
+                    }
+
                     if ($skycablePole->pole_id !== $pole->id) {
                         $skycablePole->update(['pole_id' => $pole->id]);
                     }
@@ -124,9 +156,11 @@ class AsBuiltController extends Controller
                     $updatedPoles[] = $code;
                 } else {
                     $pole = Pole::create([
-                        'pole_code' => $code,
-                        'lat'       => $lat,
-                        'lng'       => $lng,
+                        'pole_code'   => $code,
+                        'pole_label'  => $poleLabel,
+                        'label_index' => $labelIndex,
+                        'lat'         => $lat,
+                        'lng'         => $lng,
                     ]);
 
                     $skycablePole = SkycablePole::create([
@@ -277,6 +311,10 @@ class AsBuiltController extends Controller
                 'errors'        => $errors,
             ];
         });
+
+        // Warm cache immediately — next GET /skycable/nodes will be a Redis HIT
+        \App\Services\CacheWarmer::nodes($request->area_id);
+        \App\Services\CacheWarmer::spans($result['node']['id'] ?? 0);
 
         return response()->json([
             'message' => 'AsBuilt import completed.',

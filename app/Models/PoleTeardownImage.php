@@ -19,7 +19,24 @@ class PoleTeardownImage extends Model
         'pole_tag',
         'file_path',
         'inventory_type',
+        'locked',
+        'locked_by',
+        'locked_at',
     ];
+
+    protected $casts = [
+        'locked'    => 'boolean',
+        'locked_at' => 'datetime',
+    ];
+
+    public function getImageUrlAttribute(): string
+    {
+        return $this->file_path
+            ? \Illuminate\Support\Facades\Storage::url($this->file_path)
+            : '';
+    }
+
+    protected $appends = ['image_url'];
 
     public function area()
     {

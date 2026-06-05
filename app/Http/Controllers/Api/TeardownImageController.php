@@ -60,17 +60,39 @@ class TeardownImageController extends Controller
 
         $storedPath = $this->storePhoto($request->file('image'), 'teardown', 1280, $fullPath);
 
-        $imageData = PoleTeardownImage::create([
-            'report_id'      => $request->report_id,
-            'pole_id'        => $request->pole_id,
-            'area_id'        => $request->area_id,
-            'node_id'        => $request->node_id,
-            'pole_code'      => $request->pole_code,
-            'image_type'     => $request->image_type,
-            'pole_tag'       => $request->pole_tag,
-            'file_path'      => $storedPath,
-            'inventory_type' => $request->inventory_type,
-        ]);
+        // Batch-before uploads (no report_id) → upsert so retakes replace the same record + file.
+        // Regular teardown uploads (with report_id) → always create a new record per submission.
+        if ($request->report_id === null) {
+            $imageData = PoleTeardownImage::updateOrCreate(
+                [
+                    'pole_id'        => $request->pole_id,
+                    'image_type'     => $request->image_type,
+                    'inventory_type' => $request->inventory_type,
+                    'report_id'      => null,
+                ],
+                [
+                    'area_id'   => $request->area_id,
+                    'node_id'   => $request->node_id,
+                    'pole_code' => $request->pole_code,
+                    'pole_tag'  => $request->pole_tag,
+                    'file_path' => $storedPath,
+                    'locked'    => $request->boolean('lock', false),
+                ]
+            );
+        } else {
+            $imageData = PoleTeardownImage::create([
+                'report_id'      => $request->report_id,
+                'pole_id'        => $request->pole_id,
+                'area_id'        => $request->area_id,
+                'node_id'        => $request->node_id,
+                'pole_code'      => $request->pole_code,
+                'image_type'     => $request->image_type,
+                'pole_tag'       => $request->pole_tag,
+                'file_path'      => $storedPath,
+                'inventory_type' => $request->inventory_type,
+                'locked'         => false,
+            ]);
+        }
 
         return response()->json([
             'message' => 'Image uploaded successfully',
@@ -81,32 +103,59 @@ class TeardownImageController extends Controller
     public function fetchByNode(Request $request, $nodeId)
     {
         $images = PoleTeardownImage::where('node_id', $nodeId)
-            ->when($request->inventory_type, function($q) use ($request) {
-                return $q->where('inventory_type', $request->inventory_type);
-            })
+            ->when($request->inventory_type, fn($q) => $q->where('inventory_type', $request->inventory_type))
+            ->when($request->pole_id,        fn($q) => $q->where('pole_id', $request->pole_id))
+            ->when($request->image_type,     fn($q) => $q->where('image_type', $request->image_type))
+            ->latest()
             ->get();
 
-        return response()->json([
-            'data' => $images
-        ]);
+        return response()->json(['data' => $images]);
+    }
+
+    public function fetchByPole(Request $request, $poleId)
+    {
+        $images = PoleTeardownImage::where('pole_id', $poleId)
+            ->when($request->inventory_type, fn($q) => $q->where('inventory_type', $request->inventory_type))
+            ->when($request->image_type,     fn($q) => $q->where('image_type', $request->image_type))
+            ->latest()
+            ->get();
+
+        return response()->json(['data' => $images]);
     }
 
     public function fetchByReport(Request $request, $reportId)
     {
         $images = PoleTeardownImage::where('report_id', $reportId)
-            ->when($request->inventory_type, function($q) use ($request) {
-                return $q->where('inventory_type', $request->inventory_type);
-            })
+            ->when($request->inventory_type, fn($q) => $q->where('inventory_type', $request->inventory_type))
             ->get();
 
-        return response()->json([
-            'data' => $images
+        return response()->json(['data' => $images]);
+    }
+
+    public function lock(Request $request, PoleTeardownImage $image)
+    {
+        $image->update([
+            'locked'    => true,
+            'locked_by' => $request->user()?->id,
+            'locked_at' => now(),
         ]);
+
+        return response()->json(['message' => 'Image locked', 'data' => $image]);
+    }
+
+    public function unlock(Request $request, PoleTeardownImage $image)
+    {
+        $image->update([
+            'locked'    => false,
+            'locked_by' => null,
+            'locked_at' => null,
+        ]);
+
+        return response()->json(['message' => 'Image unlocked', 'data' => $image]);
     }
 
     private function sanitizePath($name)
     {
-        // Remove characters that are not alphanumeric, spaces, underscores, or hyphens
         return preg_replace('/[^A-Za-z0-9_\- ]/', '', $name);
     }
 }
