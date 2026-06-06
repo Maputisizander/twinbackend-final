@@ -6,20 +6,44 @@ Route::get('/', function () {
     return view('welcome');
 });
 
-// Admin-only monitoring dashboard — requires valid Sanctum token with telcovantage role
 Route::get('/apiconsumption', function () {
-    $token = request()->bearerToken() ?? request()->cookie('token');
-    if (! $token) {
-        // Show login prompt if accessed from browser with no token
+    $password = request()->query('key') ?? request()->cookie('dev_key');
+    if (hash('sha256', $password ?? '') !== hash('sha256', env('DEV_CONSOLE_KEY', ''))) {
         return response('
-            <html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1117;color:#fff">
-            <div style="text-align:center">
-              <p style="font-size:14px;color:#64748b;margin-bottom:16px">Admin access required</p>
-              <p style="font-size:12px;color:#475569">Open this page from the admin dashboard.</p>
+            <html><head><title>TelcoVantage Dev Console</title>
+            <style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;background:#0f1117;color:#fff}
+            .card{background:#1e2433;border:1px solid #2a3144;border-radius:16px;padding:40px;width:100%;max-width:360px;text-align:center}
+            h2{font-size:16px;font-weight:700;color:#e2e8f0;margin-bottom:8px}p{font-size:12px;color:#64748b;margin-bottom:24px}
+            input{width:100%;background:#0f1117;border:1px solid #2a3144;border-radius:8px;padding:10px 14px;color:#fff;font-size:13px;outline:none;margin-bottom:12px}
+            button{width:100%;background:#0A5C3B;border:none;border-radius:8px;padding:10px;color:#fff;font-size:13px;font-weight:700;cursor:pointer}</style></head>
+            <body><div class="card">
+            <h2>TelcoVantage Dev Console</h2><p>Enter access password</p>
+            <form method="GET"><input type="password" name="key" placeholder="Password" autofocus/><button type="submit">Access</button></form>
             </div></body></html>
-        ', 401);
+        ', 401)->withCookie(cookie()->forget('dev_key'));
     }
-    return view('apiconsumption');
+    return response(view('apiconsumption'))->withCookie(cookie('dev_key', $password, 60 * 8));
+});
+
+Route::get('/clear-cache', function () {
+    $password = request()->query('key') ?? request()->cookie('dev_key');
+    if (hash('sha256', $password ?? '') !== hash('sha256', env('DEV_CONSOLE_KEY', ''))) {
+        return response()->json(['error' => 'Unauthorized'], 401);
+    }
+
+    $results = [];
+
+    try { \Artisan::call('view:clear');   $results['view_cache']   = 'cleared'; } catch (\Exception $e) { $results['view_cache']   = $e->getMessage(); }
+    try { \Artisan::call('cache:clear');  $results['app_cache']    = 'cleared'; } catch (\Exception $e) { $results['app_cache']    = $e->getMessage(); }
+    try { \Artisan::call('config:clear'); $results['config_cache'] = 'cleared'; } catch (\Exception $e) { $results['config_cache'] = $e->getMessage(); }
+    try { \Artisan::call('route:clear');  $results['route_cache']  = 'cleared'; } catch (\Exception $e) { $results['route_cache']  = $e->getMessage(); }
+
+    return response()->json([
+        'status'  => 'ok',
+        'message' => 'All caches cleared.',
+        'results' => $results,
+        'time'    => now()->toDateTimeString(),
+    ])->withCookie(cookie('dev_key', $password, 60 * 8));
 });
 
 Route::get('/apistatus', function () {

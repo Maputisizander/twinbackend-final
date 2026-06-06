@@ -51,6 +51,7 @@ class AsBuiltController extends Controller
             'region'                       => 'nullable|string|max:255',
             'province'                     => 'nullable|string|max:255',
             'city'                         => 'nullable|string|max:255',
+            'barangay_name'                => 'nullable|string|max:255',
             'poles'                        => 'required|array|min:1',
             'poles.*.pole_index'           => 'required|integer|min:1',
             'poles.*.pole_code'            => 'required|string|max:100',
@@ -274,9 +275,10 @@ class AsBuiltController extends Controller
                 'source_file' => 'asbuilt',
             ];
 
-            if ($request->filled('region'))   $nodeUpdate['region']   = $request->region;
-            if ($request->filled('province'))  $nodeUpdate['province'] = $request->province;
-            if ($request->filled('city'))      $nodeUpdate['city']     = $request->city;
+            if ($request->filled('region'))        $nodeUpdate['region']        = $request->region;
+            if ($request->filled('province'))      $nodeUpdate['province']      = $request->province;
+            if ($request->filled('city'))          $nodeUpdate['city']          = $request->city;
+            if ($request->filled('barangay_name')) $nodeUpdate['barangay_name'] = $request->barangay_name;
 
             if (count($importedCoordinates) > 0) {
                 $nodeUpdate['lat'] = collect($importedCoordinates)->avg('lat');
@@ -466,6 +468,7 @@ class AsBuiltController extends Controller
             'region'                        => 'nullable|string|max:255',
             'province'                      => 'nullable|string|max:255',
             'city'                          => 'nullable|string|max:255',
+            'barangay_name'                 => 'nullable|string|max:255',
             'poles'                         => 'required|array|min:1',
             // pole_index is the unique key per pole within the node (e.g. "NPT-1", "CV8-001")
             // sequence is reserved for lineman teardown order — do not send from AsBuilt
@@ -495,12 +498,13 @@ class AsBuiltController extends Controller
             'area_id' => $request->area_id,
         ]);
         $node->fill(array_filter([
-            'name'        => trim($request->node_name),
-            'region'      => $request->region   ? trim($request->region)   : null,
-            'province'    => $request->province  ? trim($request->province) : null,
-            'city'        => $request->city      ? trim($request->city)     : null,
-            'report_type' => 'full_report',
-            'source_file' => 'asbuilt',
+            'name'          => trim($request->node_name),
+            'region'        => $request->region        ? trim($request->region)        : null,
+            'province'      => $request->province      ? trim($request->province)      : null,
+            'city'          => $request->city          ? trim($request->city)          : null,
+            'barangay_name' => $request->barangay_name ? trim($request->barangay_name) : null,
+            'report_type'   => 'full_report',
+            'source_file'   => 'asbuilt',
         ], fn ($v) => $v !== null));
         $node->save();
 

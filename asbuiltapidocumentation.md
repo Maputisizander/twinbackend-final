@@ -235,6 +235,7 @@ If the `node_id` already exists inside the selected `area_id`, the backend updat
 | `region` | string | ❌ | e.g. `"CALABARZON"` — saved to node |
 | `province` | string | ❌ | e.g. `"LAGUNA"` — saved to node |
 | `city` | string | ❌ | e.g. `"STA. ROSA"` — saved to node |
+| `barangay_name` | string | ❌ | e.g. `"Balibago"` — saved to node directly. Not per-pole. |
 | `poles` | array | ✅ | Minimum 1 pole required |
 | `spans` | array | ❌ | Optional. Empty array or omit if no spans |
 
@@ -826,6 +827,7 @@ Alternative to `/asbuilt/import` designed for DXF exports where poles have strin
 | `lat` / `latitude` | decimal | ✅ **Required** | GPS latitude of the pole. −90 to 90 |
 | `lng` / `longitude` | decimal | ✅ **Required** | GPS longitude of the pole. −180 to 180 |
 > Do NOT send `sequence` — it is reserved for the lineman mobile app teardown order.
+> Do NOT send `barangay_name` on poles — it has been removed from the import contract.
 
 **Span fields:**
 
