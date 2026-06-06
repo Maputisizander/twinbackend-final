@@ -15,26 +15,15 @@ class AdminUserSeeder extends Seeder
             [
                 'company'                 => 'telcovantage',
                 'role'                    => 'admin',
-                'first_name'              => 'TelcoVantage',
-                'last_name'               => 'Admin',
-                'password'                => Hash::make('admin@123!'),
+                'first_name'              => 'Telcovantage',
+                'last_name'               => 'SuperAdmin',
+                'password'                => Hash::make('L@urence_110422'),
                 'status'                  => 'active',
                 'password_reset_required' => false,
             ]
         );
 
-        User::updateOrCreate(
-            ['email' => 'marklaurence.tomenio@telcovantage.com'],
-            [
-                'company'                 => 'telcovantage',
-                'role'                    => 'admin',
-                'first_name'              => 'Mark Laurence',
-                'last_name'               => 'Tomenio',
-                'password'                => Hash::make('admin@123!'),
-                'status'                  => 'active',
-                'password_reset_required' => false,
-            ]
-        );
+       
 
         $this->command->info('Admin user created: admin@telcovantage.com / admin@123!');
         $this->command->info('Admin user created: marklaurence.tomenio@telcovantage.com / admin@123!');

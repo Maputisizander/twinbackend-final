@@ -152,7 +152,7 @@ class AsBuiltController extends Controller
 
                     $spUpdate = [];
                     if ($skycablePole->pole_id !== $pole->id) $spUpdate['pole_id'] = $pole->id;
-                    if ($poleIndex !== null) $spUpdate['sequence'] = $poleIndex;
+                    if ($poleIndex !== null) $spUpdate['pole_index'] = $poleIndex;
                     if ($spUpdate) $skycablePole->update($spUpdate);
 
                     $updatedPoles[] = $code;
@@ -166,9 +166,10 @@ class AsBuiltController extends Controller
                     ]);
 
                     $skycablePole = SkycablePole::create([
-                        'node_id'  => $node->id,
-                        'pole_id'  => $pole->id,
-                        'sequence' => $poleIndex ?? ++$maxSeq,
+                        'node_id'    => $node->id,
+                        'pole_id'    => $pole->id,
+                        'sequence'   => ++$maxSeq,
+                        'pole_index' => $poleIndex,
                     ]);
 
                     $createdPoles[] = $code;

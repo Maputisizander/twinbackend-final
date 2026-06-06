@@ -2,7 +2,7 @@
 
 **Version:** v1  
 **Backend:** TwinBackend (Laravel 11)  
-**Base URL:** `https://purple-mink-495054.hostingersite.com/api/v1`
+**Base URL:** `https://telcovantage.com/api/v1`
 
 ---
 
@@ -11,15 +11,15 @@
 Set this once in your app config:
 
 ```js
-// ✅ Online — use this for employees posting remotely (ngrok static domain)
-const BASE_URL = 'https://purple-mink-495054.hostingersite.com/api/v1'
+// ✅ Online — production domain
+const BASE_URL = 'https://telcovantage.com/api/v1'
 
 // Local Wi-Fi only — use this when device is on the same network as the server
 // const BASE_URL = 'http://192.168.1.17:8080/api/v1'
 ```
 
 All endpoint paths in this document are relative to `BASE_URL`.  
-Example: `GET /asbuilt/sites` → `GET https://purple-mink-495054.hostingersite.com//api/v1/asbuilt/sites`
+Example: `GET /asbuilt/sites` → `GET https://telcovantage.com/api/v1/asbuilt/sites`
 
 ---
 
@@ -28,7 +28,7 @@ Example: `GET /asbuilt/sites` → `GET https://purple-mink-495054.hostingersite.
 | Header | Value | Required |
 |--------|-------|----------|
 | `X-AsBuilt-Key` | `asbuilt-iq-secret-key-2026` | ✅ Always |
-| `ngrok-skip-browser-warning` | `1` | ✅ Always (required when using ngrok URL) |
+| `ngrok-skip-browser-warning` | `1` | ❌ Only needed when using ngrok URL |
 
 No user login required. API key only.
 
@@ -84,11 +84,10 @@ No user login required. API key only.
 ## ForEach Pattern
 
 ```js
-const BASE_URL = 'https://quack-useable-thesaurus.ngrok-free.dev/api/v1'
+const BASE_URL = 'https://telcovantage.com/api/v1'
 const API_KEY  = 'asbuilt-iq-secret-key-2026'
 const headers  = {
-  'X-AsBuilt-Key': API_KEY,
-  'ngrok-skip-browser-warning': '1'
+  'X-AsBuilt-Key': API_KEY
 }
 
 // Step 1 — Load all sites / areas
@@ -239,7 +238,7 @@ If the `node_id` already exists inside the selected `area_id`, the backend updat
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `pole_code` | string | ✅ | Stored UPPERCASE. e.g. `"PL-001"` |
-| `pole_index` | integer | ⭐ **Strongly recommended** | **1-based sequential number for this pole within the node.** Saved to `skycable_poles.sequence`. Node-scoped — the same physical pole can have a different `pole_index` in different nodes. Used by spans to pinpoint exactly which physical pole is the `from` or `to` endpoint. Prevents wrong spanning when two poles share the same `pole_code`. e.g. `1`, `2`, `3` … |
+| `pole_index` | integer | ⭐ **Strongly recommended** | **1-based sequential number for this pole within the node.** Saved to `skycable_poles.pole_index`. Node-scoped — the same physical pole can have a different `pole_index` in different nodes. Used by spans to pinpoint exactly which physical pole is the `from` or `to` endpoint. Prevents wrong spanning when two poles share the same `pole_code`. e.g. `1`, `2`, `3` … |
 | `latitude` | decimal | ❌ | −90 to 90 |
 | `longitude` | decimal | ❌ | −180 to 180 |
 | `barangay_name` | string | ❌ | Per-pole barangay. The node's `barangay_name` is auto-set to the most frequent value across all poles |
@@ -301,7 +300,7 @@ The backend resolves which physical pole a span endpoint refers to using this pr
 3. **Array-position fallback** — if no `pole_index` field was set on the pole, the value is treated as a 0-based array position
 4. **First occurrence** — final fallback: the first pole in the `poles` array whose `pole_code` matches ⚠️ may connect wrong poles if codes repeat
 
-**`pole_index` is also saved to `skycable_poles.sequence`.** If you provide `pole_index` on a pole, that value becomes its sequence number in the node. If omitted, the backend auto-increments from the highest existing sequence.
+**`pole_index` is saved to `skycable_poles.pole_index`.** `sequence` is auto-incremented by the backend and reserved for teardown ordering — do not rely on it for span disambiguation. If `pole_index` is omitted, span resolution falls back to GPS coordinates or array position.
 
 **Always include `pole_index` on every pole and `from_pole_index`/`to_pole_index` on every span for predictable, correct spanning.**
 
@@ -681,13 +680,12 @@ Content-Type: application/json
 
 ```js
 // ── API config ────────────────────────────────────────────────────────────────
-const BASE_URL = 'https://quack-useable-thesaurus.ngrok-free.dev/api/v1'
+const BASE_URL = 'https://telcovantage.com/api/v1'
 const API_KEY  = 'asbuilt-iq-secret-key-2026'
 
 const headers = {
   'Content-Type': 'application/json',
-  'X-AsBuilt-Key': API_KEY,
-  'ngrok-skip-browser-warning': '1'
+  'X-AsBuilt-Key': API_KEY
 }
 
 // ── Build and send payload ────────────────────────────────────────────────────
@@ -758,7 +756,7 @@ GET /api/v1/asbuilt/node/{nodeId}
 
 ```js
 const verifyRes = await fetch(`${BASE_URL}/asbuilt/node/${nodeDatabaseId}`, {
-  headers: { 'X-AsBuilt-Key': API_KEY }
+  headers: { 'X-AsBuilt-Key': API_KEY }  // no ngrok header needed on telcovantage.com
 })
 const nodeState = await verifyRes.json()
 
@@ -923,28 +921,24 @@ When a span's `from_pole_code` or `to_pole_code` is not found in the `poles` lis
 ## cURL Examples
 
 ```bash
-# Online (ngrok static domain — use this for employees)
-BASE="https://quack-useable-thesaurus.ngrok-free.dev/api/v1"
+# Production domain
+BASE="https://telcovantage.com/api/v1"
 KEY="asbuilt-iq-secret-key-2026"
-NGROK="ngrok-skip-browser-warning: 1"
 
 # Local Wi-Fi only (same network as server)
 # BASE="http://192.168.1.17:8080/api/v1"
 
 # 1 — List sites / areas
 curl "$BASE/asbuilt/sites" \
-  -H "X-AsBuilt-Key: $KEY" \
-  -H "$NGROK"
+  -H "X-AsBuilt-Key: $KEY"
 
 # 2 — List nodes for NCR, area id = 1
 curl "$BASE/asbuilt/sites/1/nodes" \
-  -H "X-AsBuilt-Key: $KEY" \
-  -H "$NGROK"
+  -H "X-AsBuilt-Key: $KEY"
 
 # 3 — Import via JSON body
 curl -X POST "$BASE/asbuilt/import" \
   -H "X-AsBuilt-Key: $KEY" \
-  -H "$NGROK" \
   -H "Content-Type: application/json" \
   -d '{
     "node_id":   "TY1401",
@@ -988,11 +982,9 @@ curl -X POST "$BASE/asbuilt/import" \
 # 4 — Import via file upload
 curl -X POST "$BASE/asbuilt/import" \
   -H "X-AsBuilt-Key: $KEY" \
-  -H "$NGROK" \
   -F "file=@export.json"
 
 # 5 — Verify node state (use integer id from import response)
 curl "$BASE/asbuilt/node/10" \
-  -H "X-AsBuilt-Key: $KEY" \
-  -H "$NGROK"
+  -H "X-AsBuilt-Key: $KEY"
 ```
