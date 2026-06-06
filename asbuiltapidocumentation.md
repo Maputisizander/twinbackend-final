@@ -41,7 +41,7 @@ No user login required. API key only.
 | **Site / Area** | `skycable_areas` (NCR, North Luzon, South Luzon, Visayas, Mindanao) |
 | **Node Identifier** | `skycable_nodes.node_id` — VARCHAR string, e.g. `"TY1401"` |
 | **Node Name** | `skycable_nodes.name` — Village Address If ano ung address, e.g. `"MONTEVISTA SUBD."` |
-| **Pole** | `poles` + `skycable_poles` | its only validate if that poles has skycable ca
+| **Pole** | `poles` + `skycable_poles` |
 | **pole_index** | `skycable_poles.pole_index` — unique 1-based counter per pole within a node, assigned by AsBuilt IQ |
 | **Span** | `skycable_spans` + `skycable_span_summaries` |
 
@@ -173,24 +173,32 @@ Returns all nodes under the selected area.
   },
   "nodes": [
     {
-      "id":          10,
-      "node_id":     "TY1401",
-      "name":        "MONTEVISTA SUBD.",
-      "full_label":  "MONTEVISTA SUBD.",
-      "status":      "pending",
-      "report_type": null,
-      "source_file": null,
-      "pole_count":  0
+      "id":               10,
+      "node_id":          "TY1401",
+      "name":             "MONTEVISTA SUBD.",
+      "full_label":       "MONTEVISTA SUBD.",
+      "status":           "pending",
+      "report_type":      null,
+      "source_file":      null,
+      "pole_count":       0,
+      "subcontractor_id": null,
+      "subcontractor":    null,
+      "team_id":          null,
+      "team":             null
     },
     {
-      "id":          11,
-      "node_id":     "TY1402",
-      "name":        "BRGY. DILA",
-      "full_label":  "BRGY. DILA",
-      "status":      "in_progress",
-      "report_type": "full_report",
-      "source_file": "asbuilt",
-      "pole_count":  15
+      "id":               11,
+      "node_id":          "TY1402",
+      "name":             "BRGY. DILA",
+      "full_label":       "BRGY. DILA",
+      "status":           "in_progress",
+      "report_type":      "full_report",
+      "source_file":      "asbuilt",
+      "pole_count":       15,
+      "subcontractor_id": 3,
+      "subcontractor":    "ABC Subcon",
+      "team_id":          7,
+      "team":             "Team Alpha"
     }
   ]
 }
@@ -203,6 +211,10 @@ Returns all nodes under the selected area.
 | `name` | Node name saved in `skycable_nodes.name` |
 | `source_file` | `"asbuilt"` if previously imported via AsBuilt IQ |
 | `pole_count` | Number of poles already enrolled in this node |
+| `subcontractor_id` | Integer ID of assigned subcontractor, or `null` |
+| `subcontractor` | Name of assigned subcontractor, or `null` |
+| `team_id` | Integer ID of assigned team, or `null` |
+| `team` | Name of assigned team, or `null` |
 
 ---
 
@@ -245,8 +257,8 @@ If the `node_id` already exists inside the selected `area_id`, the backend updat
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `pole_index` | integer | ✅ **Required** | **base how the asbuilt read the pole inside of the canvass
-| `pole_code` | string | ✅ | Stored UPPERCASE. e.g. `"PL-001"` | (ito ung poletag ng poles)
+| `pole_index` | integer | ✅ **Required** | 1-based sequential counter per pole within the node. Used by spans to identify exact poles. |
+| `pole_code` | string | ✅ | Pole tag label from the canvas. Stored UPPERCASE. e.g. `"PL-001"`, `"NPT"` |
 | `latitude` | decimal | ✅ **Required** | GPS latitude of the pole. −90 to 90 |
 | `longitude` | decimal | ✅ **Required** | GPS longitude of the pole. −180 to 180 |
 
@@ -403,7 +415,7 @@ spans:
     },
     "poles_created": ["PL-001", "PL-002", "PL-003"],
     "poles_updated": [],
-    "spans_created": ["PL-001 → PL-002", "PL-002 → PL-003"],
+    "spans_created": ["SRC-0001", "SRC-0002"],
     "spans_updated": [],
     "total_poles":   3,
     "total_spans":   2,
@@ -446,17 +458,30 @@ Check what was imported. `{nodeId}` is the **integer database ID** from `skycabl
 ```json
 {
   "node": {
-    "id":          10,
-    "node_id":     "TY1401",
-    "name":        "MONTEVISTA SUBD.",
-    "area":        "NCR",
-    "region":      "CALABARZON",
-    "province":    "LAGUNA",
-    "city":        "STA. ROSA",
-    "barangay":    "Balibago",
-    "report_type": "full_report",
-    "source_file": "asbuilt",
-    "status":      "pending"
+    "id":               10,
+    "node_id":          "TY1401",
+    "name":             "MONTEVISTA SUBD.",
+    "area":             "NCR",
+    "region":           "CALABARZON",
+    "province":         "LAGUNA",
+    "city":             "STA. ROSA",
+    "barangay":         "Balibago",
+    "report_type":      "full_report",
+    "source_file":      "asbuilt",
+    "status":           "pending",
+    "subcontractor_id": 3,
+    "subcontractor":    "ABC Subcon",
+    "team_id":          7,
+    "team":             "Team Alpha"
+  },
+  "component_totals": {
+    "node":        5,
+    "amplifier":   10,
+    "extender":    3,
+    "tsc":         2,
+    "powersupply": 1,
+    "ps_housing":  1,
+    "cable":       285.5
   },
   "poles": [
     {
@@ -500,6 +525,8 @@ Check what was imported. `{nodeId}` is the **integer database ID** from `skycabl
 > The `pole_index` field in each pole is the AsBuilt-assigned count (1, 2, 3 …). `sequence` is not returned — it belongs to the lineman teardown workflow.
 > The node's barangay is returned as `"barangay"` (not `"barangay_name"`) in this endpoint.
 > Each span returns `span_code` — auto-generated unique code based on node city initials + sequential number.
+> `component_totals` is the sum of all expected components across every span in the node — use this for the node-level summary card.
+> `subcontractor` and `team` are the resolved names. Both are `null` if not yet assigned.
 
 ---
 
@@ -526,7 +553,7 @@ Every span gets a unique `span_code` automatically generated by the backend duri
 ### Rules
 
 - Generated from **first letter of each word** in the node's `city` field
-- Sequential per node — resets per node prefix
+- Sequential **globally** across all spans with the same city prefix — prevents unique constraint collision
 - Existing spans that already have a `span_code` keep their code on re-import
 - New spans added later continue from the highest existing number
 
@@ -546,8 +573,6 @@ Total amplifiers in node = 3
 ```
 
 So when a lineman does teardown on `LPC-0001`, they know to collect **2 amplifiers** on that specific span. The `span_code` is the unique identifier shown on their mobile app.
-
----
 
 ---
 
@@ -816,47 +841,89 @@ displaySpans(nodeState.spans)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/asbuilt/sites` | List all areas |
-| `GET` | `/asbuilt/sites/{areaId}/nodes` | List nodes under an area |
+| `GET` | `/asbuilt/sites/{areaId}/nodes` | List nodes under an area (includes subcontractor + team names) |
 | `POST` | `/asbuilt/import` | Bulk import — JSON body or `.json` file upload |
 | `POST` | `/asbuilt/import-by-sequence` | Index-based import — spans use `from_pole_index`/`to_pole_index` with string pole identifiers |
-| `GET` | `/asbuilt/node/{nodeId}` | Verify node state after import |
+| `GET` | `/asbuilt/node/{nodeId}` | Verify node state after import (includes subcontractor, team, component_totals) |
 | `GET` | `/asbuilt/subcontractors` | List all subcontractors — use IDs for `subcontractor_id` in import |
 | `GET` | `/asbuilt/teams?subcontractor_id={id}` | List teams — filter by subcontractor |
+| `POST` | `/asbuilt/backfill-span-codes` | One-time utility — generate `span_code` for all existing spans that have none |
 
 ---
 
-## ⚠️ Frontend TODO — Subcontractor & Team Assignment UI
+## Subcontractor & Team Assignment
 
-> **For the AsBuilt IQ frontend team.**  
-> The backend already supports `subcontractor_id` and `team_id` in the import payload.  
-> Build this UI so linemen/encoders can assign a team before posting — no need to go back to the web dashboard to assign.
+`subcontractor_id` and `team_id` are optional fields in the import payload. Assign them before posting so linemen can be tracked per node without going back to the web dashboard.
 
-### Required UI Flow
+**UI flow:**
 
 ```
 1. After user selects a Site and Node (or creates one manually)
    — show a subcontractor + team assignment step BEFORE the Post button
-
-2. Load all subcontractors:
-   GET /api/v1/asbuilt/subcontractors
-   → forEach → display as dropdown or card list
-
-3. User selects a subcontractor
-   → Load teams under that subcontractor:
-   GET /api/v1/asbuilt/teams?subcontractor_id={id}
-   → forEach → display as dropdown or card list
-
+2. Load all subcontractors → forEach → display as dropdown or card list
+3. User selects a subcontractor → load teams under it → forEach → display
 4. User selects a team
-
-5. Include in the import payload:
-   {
-     "subcontractor_id": selectedSubcontractor.id,
-     "team_id":          selectedTeam.id,
-     ...poles, spans
-   }
+5. Include subcontractor_id and team_id in the import payload
 ```
 
-### Sample Code
+---
+
+### 8. List Subcontractors
+
+```
+GET /api/v1/asbuilt/subcontractors
+```
+
+Returns all subcontractors. Use the `id` as `subcontractor_id` in the import payload.
+
+**Response `200`:**
+
+```json
+[
+  { "id": 1, "name": "XYZ Contractors" },
+  { "id": 2, "name": "Meridian Infra"  },
+  { "id": 3, "name": "ABC Subcon"      }
+]
+```
+
+**forEach pattern:**
+
+```js
+const subRes  = await fetch(`${BASE_URL}/asbuilt/subcontractors`, { headers })
+const subcons = await subRes.json()
+
+subcons.forEach(sub => {
+  displaySubcontractorOption({ id: sub.id, name: sub.name })
+})
+```
+
+---
+
+### 9. List Teams
+
+```
+GET /api/v1/asbuilt/teams?subcontractor_id={id}
+```
+
+Returns all teams. Filter by `subcontractor_id` to show only teams under the selected subcontractor. Use the `id` as `team_id` in the import payload.
+
+**Query parameter:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `subcontractor_id` | integer | ❌ | Filter teams by subcontractor. Omit to return all teams. |
+
+**Response `200`:**
+
+```json
+[
+  { "id": 5,  "name": "Team Bravo", "subcontractor_id": 3 },
+  { "id": 7,  "name": "Team Alpha", "subcontractor_id": 3 },
+  { "id": 12, "name": "Team Delta", "subcontractor_id": 3 }
+]
+```
+
+**Full subcontractor → team forEach pattern:**
 
 ```js
 // Step 1 — Load all subcontractors
@@ -868,36 +935,33 @@ subcons.forEach(sub => {
 })
 
 // Step 2 — User picks a subcontractor → load its teams
-const teamRes = await fetch(`${BASE_URL}/asbuilt/teams?subcontractor_id=${selectedSubcon.id}`, { headers })
-const teams   = await teamRes.json()
+const selectedSubcon = subcons[0]  // whichever the user selected
+
+const teamRes = await fetch(
+  `${BASE_URL}/asbuilt/teams?subcontractor_id=${selectedSubcon.id}`,
+  { headers }
+)
+const teams = await teamRes.json()
 
 teams.forEach(team => {
   displayTeamOption({ id: team.id, name: team.name })
 })
 
-// Step 3 — Include in payload
+// Step 3 — Include both IDs in the import payload
+const selectedTeam = teams[0]  // whichever the user selected
+
 const payload = {
   node_id:          targetNode.node_id,
   node_name:        targetNode.name,
   area_id:          selectedArea.id,
-  subcontractor_id: selectedSubcon.id,   // ← assign subcontractor
-  team_id:          selectedTeam.id,     // ← assign team
+  subcontractor_id: selectedSubcon.id,
+  team_id:          selectedTeam.id,
   poles: [...],
   spans: [...]
 }
 ```
 
-### What it looks like on the node card (after import)
-
-```
-Node: FOR DEMO LAS PINAS LATER
-├── Subcontractor: ABC Subcon
-├── Team: Team Alpha
-├── Spans: 85
-└── Target: 120m
-```
-
-> Both `subcontractor_id` and `team_id` are optional — if the user skips assignment, the node saves without them and can be assigned later from the web dashboard.
+> Both `subcontractor_id` and `team_id` are optional — if skipped, the node saves without them and can be assigned later from the web dashboard.
 
 ---
 
@@ -974,6 +1038,34 @@ Alternative to `/asbuilt/import` designed for DXF exports where poles have strin
 When a DXF has multiple poles with the same name (`NPT`, `PT`, `NT`), `pole_index` gives each a unique human-readable ID (`NPT-1`, `NPT-2`, `NPT-3`). Spans reference these exact IDs — `NPT-1` always connects to the correct physical pole regardless of name collisions.
 
 **Response `201`:** Same shape as `/import` response.
+
+---
+
+---
+
+### 7. Backfill Span Codes
+
+```
+POST /api/v1/asbuilt/backfill-span-codes
+```
+
+One-time utility endpoint. Scans all existing spans that have no `span_code` and generates one for each using the standard city-initials format. Run this once after deploying the span code feature to existing data.
+
+**Response `200`:**
+
+```json
+{
+  "message": "Backfilled 142 span codes.",
+  "updated": 142
+}
+```
+
+> Safe to call multiple times — only affects spans where `span_code IS NULL`. Already-coded spans are untouched.
+
+```bash
+curl -X POST "$BASE/asbuilt/backfill-span-codes" \
+  -H "X-AsBuilt-Key: $KEY"
+```
 
 ---
 

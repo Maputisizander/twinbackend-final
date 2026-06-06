@@ -359,17 +359,22 @@ class AsBuiltController extends Controller
 
         $nodes = SkycableNode::where('area_id', $areaId)
             ->withCount('skycablePoles as pole_count')
+            ->with(['subcontractor', 'team'])
             ->orderBy('name')
             ->get()
             ->map(fn ($n) => [
-                'id'          => $n->id,
-                'node_id'     => $n->node_id,
-                'name'        => $n->name,
-                'full_label'  => $n->full_label,
-                'status'      => $n->status,
-                'report_type' => $n->report_type,
-                'source_file' => $n->source_file,
-                'pole_count'  => $n->pole_count,
+                'id'               => $n->id,
+                'node_id'          => $n->node_id,
+                'name'             => $n->name,
+                'full_label'       => $n->full_label,
+                'status'           => $n->status,
+                'report_type'      => $n->report_type,
+                'source_file'      => $n->source_file,
+                'pole_count'       => $n->pole_count,
+                'subcontractor_id' => $n->subcontractor_id,
+                'subcontractor'    => $n->subcontractor?->name,
+                'team_id'          => $n->team_id,
+                'team'             => $n->team?->name,
             ]);
 
         return response()->json([
@@ -385,6 +390,8 @@ class AsBuiltController extends Controller
     {
         $node = SkycableNode::with([
             'area',
+            'subcontractor',
+            'team',
             'skycablePoles.pole',
             'spans.fromPole.pole',
             'spans.toPole.pole',
@@ -425,20 +432,36 @@ class AsBuiltController extends Controller
             ],
         ]);
 
+        // Node-level component totals across all spans
+        $totals = [
+            'node'        => $node->spans->sum(fn ($s) => $s->summary?->expected_node        ?? 0),
+            'amplifier'   => $node->spans->sum(fn ($s) => $s->summary?->expected_amplifier   ?? 0),
+            'extender'    => $node->spans->sum(fn ($s) => $s->summary?->expected_extender    ?? 0),
+            'tsc'         => $node->spans->sum(fn ($s) => $s->summary?->expected_tsc         ?? 0),
+            'powersupply' => $node->spans->sum(fn ($s) => $s->summary?->expected_powersupply ?? 0),
+            'ps_housing'  => $node->spans->sum(fn ($s) => $s->summary?->expected_ps_housing  ?? 0),
+            'cable'       => $node->spans->sum(fn ($s) => $s->summary?->expected_cable       ?? 0),
+        ];
+
         return response()->json([
             'node' => [
-                'id'          => $node->id,
-                'node_id'     => $node->node_id,
-                'name'        => $node->name,
-                'area'        => $node->area?->name,
-                'region'      => $node->region,
-                'province'    => $node->province,
-                'city'        => $node->city,
-                'barangay'    => $node->barangay_name,
-                'report_type' => $node->report_type,
-                'source_file' => $node->source_file,
-                'status'      => $node->status,
+                'id'               => $node->id,
+                'node_id'          => $node->node_id,
+                'name'             => $node->name,
+                'area'             => $node->area?->name,
+                'region'           => $node->region,
+                'province'         => $node->province,
+                'city'             => $node->city,
+                'barangay'         => $node->barangay_name,
+                'report_type'      => $node->report_type,
+                'source_file'      => $node->source_file,
+                'status'           => $node->status,
+                'subcontractor_id' => $node->subcontractor_id,
+                'subcontractor'    => $node->subcontractor?->name,
+                'team_id'          => $node->team_id,
+                'team'             => $node->team?->name,
             ],
+            'component_totals' => $totals,
             'poles' => $poles,
             'spans' => $spans,
         ]);
@@ -716,6 +739,29 @@ class AsBuiltController extends Controller
     }
 
     /**
+     * POST /asbuilt/backfill-span-codes
+     * One-time utility — generates span_code for all existing spans that don't have one.
+     */
+    public function backfillSpanCodes(): \Illuminate\Http\JsonResponse
+    {
+        $spans = SkycableSpan::whereNull('span_code')
+            ->with('node')
+            ->get();
+
+        $updated = 0;
+        foreach ($spans as $span) {
+            if (! $span->node) continue;
+            $span->update(['span_code' => $this->generateSpanCode($span->node)]);
+            $updated++;
+        }
+
+        return response()->json([
+            'message' => "Backfilled {$updated} span codes.",
+            'updated' => $updated,
+        ]);
+    }
+
+    /**
      * GET /asbuilt/subcontractors
      */
     public function subcontractors(): \Illuminate\Http\JsonResponse
@@ -748,9 +794,9 @@ class AsBuiltController extends Controller
         $prefix = strtoupper(implode('', array_map(fn ($w) => $w[0] ?? '', $words)));
         $prefix = substr($prefix ?: 'SPN', 0, 4);
 
-        // Sequential counter per node — find highest existing span_code number
-        $last = SkycableSpan::where('node_id', $node->id)
-            ->whereNotNull('span_code')
+        // Sequential counter globally across ALL spans with this prefix
+        // prevents unique constraint violation when multiple nodes share the same city initials
+        $last = SkycableSpan::whereNotNull('span_code')
             ->where('span_code', 'like', "{$prefix}-%")
             ->orderByRaw('LENGTH(span_code) DESC, span_code DESC')
             ->value('span_code');

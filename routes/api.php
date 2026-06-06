@@ -71,6 +71,9 @@ Route::middleware(['asbuilt.key'])->prefix('asbuilt')->group(function () {
     // Team & subcontractor lookup — for assignment during import
     Route::get('subcontractors',           [Api\Skycable\AsBuiltController::class, 'subcontractors']);
     Route::get('teams',                    [Api\Skycable\AsBuiltController::class, 'teams']);
+
+    // Backfill span_codes for existing spans that were imported before span_code was added
+    Route::post('backfill-span-codes',     [Api\Skycable\AsBuiltController::class, 'backfillSpanCodes']);
 });
 
 // ── Field submission (any authenticated company user) ─────────────────────────
