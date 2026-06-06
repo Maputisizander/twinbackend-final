@@ -67,6 +67,10 @@ Route::middleware(['asbuilt.key'])->prefix('asbuilt')->group(function () {
 
     // Read back node state after import
     Route::get('node/{nodeId}',            [Api\Skycable\AsBuiltController::class, 'node']);
+
+    // Team & subcontractor lookup — for assignment during import
+    Route::get('subcontractors',           [Api\Skycable\AsBuiltController::class, 'subcontractors']);
+    Route::get('teams',                    [Api\Skycable\AsBuiltController::class, 'teams']);
 });
 
 // ── Field submission (any authenticated company user) ─────────────────────────

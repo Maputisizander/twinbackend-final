@@ -52,6 +52,8 @@ class AsBuiltController extends Controller
             'province'                     => 'nullable|string|max:255',
             'city'                         => 'nullable|string|max:255',
             'barangay_name'                => 'nullable|string|max:255',
+            'subcontractor_id'             => 'nullable|integer|exists:subcontractors,id',
+            'team_id'                      => 'nullable|integer|exists:teams,id',
             'poles'                        => 'required|array|min:1',
             'poles.*.pole_index'           => 'required|integer|min:1',
             'poles.*.pole_code'            => 'required|string|max:100',
@@ -237,18 +239,19 @@ class AsBuiltController extends Controller
                     [
                         'strand_length'  => $strandLength,
                         'number_of_runs' => $numberOfRuns,
+                        'span_code'      => $this->generateSpanCode($node),
                         'status'         => 'pending',
                     ]
                 );
 
                 if ($span->wasRecentlyCreated) {
-                    $createdSpans[] = "{$fromCode} → {$toCode}";
+                    $createdSpans[] = $span->span_code ?? "{$fromCode} → {$toCode}";
                 } else {
                     $span->update([
                         'strand_length'  => $strandLength  ?? $span->strand_length,
                         'number_of_runs' => $numberOfRuns  ?? $span->number_of_runs,
                     ]);
-                    $updatedSpans[] = "{$fromCode} → {$toCode}";
+                    $updatedSpans[] = $span->span_code ?? "{$fromCode} → {$toCode}";
                 }
 
                 $comp = $spanData['components'] ?? [];
@@ -275,10 +278,12 @@ class AsBuiltController extends Controller
                 'source_file' => 'asbuilt',
             ];
 
-            if ($request->filled('region'))        $nodeUpdate['region']        = $request->region;
-            if ($request->filled('province'))      $nodeUpdate['province']      = $request->province;
-            if ($request->filled('city'))          $nodeUpdate['city']          = $request->city;
-            if ($request->filled('barangay_name')) $nodeUpdate['barangay_name'] = $request->barangay_name;
+            if ($request->filled('region'))           $nodeUpdate['region']           = $request->region;
+            if ($request->filled('province'))         $nodeUpdate['province']         = $request->province;
+            if ($request->filled('city'))             $nodeUpdate['city']             = $request->city;
+            if ($request->filled('barangay_name'))    $nodeUpdate['barangay_name']    = $request->barangay_name;
+            if ($request->filled('subcontractor_id')) $nodeUpdate['subcontractor_id'] = $request->subcontractor_id;
+            if ($request->filled('team_id'))          $nodeUpdate['team_id']          = $request->team_id;
 
             if (count($importedCoordinates) > 0) {
                 $nodeUpdate['lat'] = collect($importedCoordinates)->avg('lat');
@@ -400,14 +405,17 @@ class AsBuiltController extends Controller
         ]);
 
         $spans = $node->spans->map(fn ($s) => [
-            'span_id'        => $s->id,
-            'from_pole_code' => $s->fromPole?->pole?->pole_code,
-            'to_pole_code'   => $s->toPole?->pole?->pole_code,
-            'strand_length'  => $s->strand_length,
-            'number_of_runs' => $s->number_of_runs,
-            'expected_cable' => $s->summary?->expected_cable ?? 0,
-            'status'         => $s->status,
-            'components'     => [
+            'span_id'          => $s->id,
+            'span_code'        => $s->span_code,
+            'from_pole_code'   => $s->fromPole?->pole?->pole_code,
+            'from_pole_index'  => $s->fromPole?->pole_index,
+            'to_pole_code'     => $s->toPole?->pole?->pole_code,
+            'to_pole_index'    => $s->toPole?->pole_index,
+            'strand_length'    => $s->strand_length,
+            'number_of_runs'   => $s->number_of_runs,
+            'expected_cable'   => $s->summary?->expected_cable ?? 0,
+            'status'           => $s->status,
+            'components'       => [
                 'node'        => $s->summary?->expected_node        ?? 0,
                 'amplifier'   => $s->summary?->expected_amplifier   ?? 0,
                 'extender'    => $s->summary?->expected_extender    ?? 0,
@@ -469,6 +477,8 @@ class AsBuiltController extends Controller
             'province'                      => 'nullable|string|max:255',
             'city'                          => 'nullable|string|max:255',
             'barangay_name'                 => 'nullable|string|max:255',
+            'subcontractor_id'              => 'nullable|integer|exists:subcontractors,id',
+            'team_id'                       => 'nullable|integer|exists:teams,id',
             'poles'                         => 'required|array|min:1',
             // pole_index is the unique key per pole within the node (e.g. "NPT-1", "CV8-001")
             // sequence is reserved for lineman teardown order — do not send from AsBuilt
@@ -498,13 +508,15 @@ class AsBuiltController extends Controller
             'area_id' => $request->area_id,
         ]);
         $node->fill(array_filter([
-            'name'          => trim($request->node_name),
-            'region'        => $request->region        ? trim($request->region)        : null,
-            'province'      => $request->province      ? trim($request->province)      : null,
-            'city'          => $request->city          ? trim($request->city)          : null,
-            'barangay_name' => $request->barangay_name ? trim($request->barangay_name) : null,
-            'report_type'   => 'full_report',
-            'source_file'   => 'asbuilt',
+            'name'             => trim($request->node_name),
+            'region'           => $request->region           ? trim($request->region)        : null,
+            'province'         => $request->province         ? trim($request->province)      : null,
+            'city'             => $request->city             ? trim($request->city)          : null,
+            'barangay_name'    => $request->barangay_name    ? trim($request->barangay_name) : null,
+            'subcontractor_id' => $request->subcontractor_id ?: null,
+            'team_id'          => $request->team_id          ?: null,
+            'report_type'      => 'full_report',
+            'source_file'      => 'asbuilt',
         ], fn ($v) => $v !== null));
         $node->save();
 
@@ -634,14 +646,15 @@ class AsBuiltController extends Controller
 
                 if ($span) {
                     $span->update(['node_id' => $node->id]);
-                    $updatedSpans[] = "{$fromKey}→{$toKey}";
+                    $updatedSpans[] = $span->span_code ?? "{$fromKey}→{$toKey}";
                 } else {
                     $span = SkycableSpan::create([
                         'node_id'      => $node->id,
                         'from_pole_id' => $fromSkId,
                         'to_pole_id'   => $toSkId,
+                        'span_code'    => $this->generateSpanCode($node),
                     ]);
-                    $createdSpans[] = "{$fromKey}→{$toKey}";
+                    $createdSpans[] = $span->span_code ?? "{$fromKey}→{$toKey}";
                 }
 
                 SkycableSpanSummary::updateOrCreate(
@@ -700,6 +713,54 @@ class AsBuiltController extends Controller
                 'errors'        => $result['errors'],
             ],
         ], 201);
+    }
+
+    /**
+     * GET /asbuilt/subcontractors
+     */
+    public function subcontractors(): \Illuminate\Http\JsonResponse
+    {
+        $subs = \App\Models\Subcontractor::orderBy('name')
+            ->get(['id', 'name']);
+
+        return response()->json($subs);
+    }
+
+    /**
+     * GET /asbuilt/teams?subcontractor_id={id}
+     */
+    public function teams(\Illuminate\Http\Request $request): \Illuminate\Http\JsonResponse
+    {
+        $query = \App\Models\Team::orderBy('name');
+
+        if ($request->filled('subcontractor_id')) {
+            $query->where('subcontractor_id', $request->subcontractor_id);
+        }
+
+        return response()->json($query->get(['id', 'name', 'subcontractor_id']));
+    }
+
+    private function generateSpanCode(\App\Models\SkycableNode $node): string
+    {
+        // Build prefix from city → initials of each word, uppercase, max 4 chars
+        $city   = trim($node->city ?? $node->name ?? '');
+        $words  = preg_split('/\s+/', $city);
+        $prefix = strtoupper(implode('', array_map(fn ($w) => $w[0] ?? '', $words)));
+        $prefix = substr($prefix ?: 'SPN', 0, 4);
+
+        // Sequential counter per node — find highest existing span_code number
+        $last = SkycableSpan::where('node_id', $node->id)
+            ->whereNotNull('span_code')
+            ->where('span_code', 'like', "{$prefix}-%")
+            ->orderByRaw('LENGTH(span_code) DESC, span_code DESC')
+            ->value('span_code');
+
+        $next = 1;
+        if ($last && preg_match('/-(\d+)$/', $last, $m)) {
+            $next = (int) $m[1] + 1;
+        }
+
+        return $prefix . '-' . str_pad($next, 4, '0', STR_PAD_LEFT);
     }
 
     private function normalizeCoordinate(mixed $value): ?float

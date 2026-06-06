@@ -25,27 +25,6 @@ Route::get('/apiconsumption', function () {
     return response(view('apiconsumption'))->withCookie(cookie('dev_key', $password, 60 * 8));
 });
 
-Route::get('/clear-cache', function () {
-    $password = request()->query('key') ?? request()->cookie('dev_key');
-    if (hash('sha256', $password ?? '') !== hash('sha256', env('DEV_CONSOLE_KEY', ''))) {
-        return response()->json(['error' => 'Unauthorized'], 401);
-    }
-
-    $results = [];
-
-    try { \Artisan::call('view:clear');   $results['view_cache']   = 'cleared'; } catch (\Exception $e) { $results['view_cache']   = $e->getMessage(); }
-    try { \Artisan::call('cache:clear');  $results['app_cache']    = 'cleared'; } catch (\Exception $e) { $results['app_cache']    = $e->getMessage(); }
-    try { \Artisan::call('config:clear'); $results['config_cache'] = 'cleared'; } catch (\Exception $e) { $results['config_cache'] = $e->getMessage(); }
-    try { \Artisan::call('route:clear');  $results['route_cache']  = 'cleared'; } catch (\Exception $e) { $results['route_cache']  = $e->getMessage(); }
-
-    return response()->json([
-        'status'  => 'ok',
-        'message' => 'All caches cleared.',
-        'results' => $results,
-        'time'    => now()->toDateTimeString(),
-    ])->withCookie(cookie('dev_key', $password, 60 * 8));
-});
-
 Route::get('/apistatus', function () {
     $dbStatus = 'Unknown';
     $dbError = null;
@@ -116,14 +95,22 @@ Route::post('/contact-send', function (\Illuminate\Http\Request $request) {
         'message'    => 'required|string|max:5000',
     ]);
 
-    \Illuminate\Support\Facades\Mail::to($request->email)->send(
-        new \App\Mail\ContactThankyou(
-            firstName:   $request->first_name,
-            lastName:    $request->last_name,
-            company:     $request->company,
-            userMessage: $request->message,
-        )
-    );
+    try {
+        \Illuminate\Support\Facades\Mail::to($request->email)->send(
+            new \App\Mail\ContactThankyou(
+                firstName:   $request->first_name,
+                lastName:    $request->last_name,
+                company:     $request->company,
+                userMessage: $request->message,
+            )
+        );
+    } catch (\Exception $e) {
+        \Illuminate\Support\Facades\Log::error('Contact mail failed: ' . $e->getMessage());
+        return response()->json([
+            'status'  => 'error',
+            'message' => 'Mail error: ' . $e->getMessage(),
+        ], 500);
+    }
 
     return response()->json([
         'status'  => 'success',
