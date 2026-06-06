@@ -52,15 +52,17 @@ class AsBuiltController extends Controller
             'province'                     => 'nullable|string|max:255',
             'city'                         => 'nullable|string|max:255',
             'poles'                        => 'required|array|min:1',
+            'poles.*.pole_index'           => 'required|integer|min:1',
             'poles.*.pole_code'            => 'required|string|max:100',
-            'poles.*.latitude'             => 'nullable|numeric|between:-90,90',
-            'poles.*.longitude'            => 'nullable|numeric|between:-180,180',
-            'poles.*.barangay_name'        => 'nullable|string|max:255',
+            'poles.*.latitude'             => 'required|numeric|between:-90,90',
+            'poles.*.longitude'            => 'required|numeric|between:-180,180',
             'spans'                        => 'nullable|array',
             'spans.*.from_pole_code'       => 'required|string',
             'spans.*.to_pole_code'         => 'required|string',
-            'spans.*.strand_length'        => 'nullable|numeric|min:0',
-            'spans.*.number_of_runs'       => 'nullable|integer|min:1',
+            'spans.*.from_pole_index'      => 'required_with:spans|integer|min:1',
+            'spans.*.to_pole_index'        => 'required_with:spans|integer|min:1',
+            'spans.*.strand_length'        => 'required_with:spans|numeric|min:0',
+            'spans.*.number_of_runs'       => 'required_with:spans|integer|min:1',
             'spans.*.components'           => 'nullable|array',
             'spans.*.components.node'      => 'nullable|integer|min:0',
             'spans.*.components.amplifier' => 'nullable|integer|min:0',
@@ -91,10 +93,8 @@ class AsBuiltController extends Controller
             $poleCodeToEntries  = [];
             $usedSkycablePoleIds = [];
             $importedCoordinates = [];
-            $barangayNames       = [];
 
             // ── 1. Upsert Poles ──────────────────────────────────────────────
-            $maxSeq = SkycablePole::where('node_id', $node->id)->max('sequence') ?? 0;
 
             // Pre-count pole_code occurrences to detect indexed names (NPT-1, NPT-2…)
             // pole_label = base name before the trailing "-N" suffix
@@ -134,13 +134,21 @@ class AsBuiltController extends Controller
                 $lng       = $this->normalizeCoordinate($poleData['longitude'] ?? null);
                 $poleIndex = isset($poleData['pole_index']) ? (int) $poleData['pole_index'] : null;
 
-                if (! empty($poleData['barangay_name'])) {
-                    $barangayNames[] = trim($poleData['barangay_name']);
+                // Match by pole_index first — two poles can share the same pole_code (e.g. "NPT")
+                // but each has a distinct pole_index. Matching by code alone would find the wrong pole.
+                $skycablePole = null;
+                if ($poleIndex !== null) {
+                    $skycablePole = SkycablePole::with('pole')
+                        ->where('node_id', $node->id)
+                        ->where('pole_index', $poleIndex)
+                        ->whereNotIn('id', $usedSkycablePoleIds ?: [0])
+                        ->first();
                 }
-
-                $skycablePole = $this->matchExistingNodePole(
-                    $node->id, $code, $lat, $lng, $usedSkycablePoleIds
-                );
+                if (! $skycablePole) {
+                    $skycablePole = $this->matchExistingNodePole(
+                        $node->id, $code, $lat, $lng, $usedSkycablePoleIds
+                    );
+                }
 
                 if ($skycablePole) {
                     $pole = $this->preparePoleForNodeImport($skycablePole, $code, $lat, $lng);
@@ -153,6 +161,7 @@ class AsBuiltController extends Controller
                     $spUpdate = [];
                     if ($skycablePole->pole_id !== $pole->id) $spUpdate['pole_id'] = $pole->id;
                     if ($poleIndex !== null) $spUpdate['pole_index'] = $poleIndex;
+
                     if ($spUpdate) $skycablePole->update($spUpdate);
 
                     $updatedPoles[] = $code;
@@ -168,7 +177,6 @@ class AsBuiltController extends Controller
                     $skycablePole = SkycablePole::create([
                         'node_id'    => $node->id,
                         'pole_id'    => $pole->id,
-                        'sequence'   => ++$maxSeq,
                         'pole_index' => $poleIndex,
                     ]);
 
@@ -258,14 +266,7 @@ class AsBuiltController extends Controller
                 );
             }
 
-            // ── 3. Majority barangay from poles ───────────────────────────────
-            $majorityBarangay = collect($barangayNames)
-                ->countBy()
-                ->sortDesc()
-                ->keys()
-                ->first();
-
-            // ── 4. Update node metadata ───────────────────────────────────────
+            // ── 3. Update node metadata ───────────────────────────────────────
             $nodeUpdate = [
                 'name'        => $request->node_name,
                 'report_type' => 'full_report',
@@ -276,7 +277,6 @@ class AsBuiltController extends Controller
             if ($request->filled('region'))   $nodeUpdate['region']   = $request->region;
             if ($request->filled('province'))  $nodeUpdate['province'] = $request->province;
             if ($request->filled('city'))      $nodeUpdate['city']     = $request->city;
-            if ($majorityBarangay)             $nodeUpdate['barangay_name'] = $majorityBarangay;
 
             if (count($importedCoordinates) > 0) {
                 $nodeUpdate['lat'] = collect($importedCoordinates)->avg('lat');
@@ -388,7 +388,7 @@ class AsBuiltController extends Controller
             'skycable_pole_id' => $sp->id,
             'pole_id'          => $sp->pole?->id,
             'pole_code'        => $sp->pole?->pole_code,
-            'sequence'         => $sp->sequence,
+            'pole_index'       => $sp->pole_index,
             'latitude'         => $sp->pole?->lat,
             'longitude'        => $sp->pole?->lng,
             'status'           => $sp->status,
@@ -467,25 +467,19 @@ class AsBuiltController extends Controller
             'province'                      => 'nullable|string|max:255',
             'city'                          => 'nullable|string|max:255',
             'poles'                         => 'required|array|min:1',
-            // pole_index is the preferred unique key (e.g. "NPT-1", "CV8-001")
-            // sequence is accepted for backward compatibility
-            'poles.*.pole_index'            => 'nullable|string|max:50',
-            'poles.*.sequence'              => 'nullable|integer|min:1',
+            // pole_index is the unique key per pole within the node (e.g. "NPT-1", "CV8-001")
+            // sequence is reserved for lineman teardown order — do not send from AsBuilt
+            'poles.*.pole_index'            => 'required|string|max:50',
             'poles.*.pole_code'             => 'required|string|max:100',
-            'poles.*.lat'                   => 'nullable|numeric|between:-90,90',
-            'poles.*.lng'                   => 'nullable|numeric|between:-180,180',
-            'poles.*.latitude'              => 'nullable|numeric|between:-90,90',
-            'poles.*.longitude'             => 'nullable|numeric|between:-180,180',
-            'poles.*.barangay_name'         => 'nullable|string|max:255',
+            'poles.*.lat'                   => 'required_without:poles.*.latitude|numeric|between:-90,90',
+            'poles.*.lng'                   => 'required_without:poles.*.longitude|numeric|between:-180,180',
+            'poles.*.latitude'              => 'required_without:poles.*.lat|numeric|between:-90,90',
+            'poles.*.longitude'             => 'required_without:poles.*.lng|numeric|between:-180,180',
             'spans'                         => 'nullable|array',
-            // from_pole_index / to_pole_index are preferred (human-readable, no NPT confusion)
-            // from_sequence / to_sequence accepted for backward compatibility
-            'spans.*.from_pole_index'       => 'nullable|string|max:50',
-            'spans.*.to_pole_index'         => 'nullable|string|max:50',
-            'spans.*.from_sequence'         => 'nullable|integer|min:1',
-            'spans.*.to_sequence'           => 'nullable|integer|min:1',
-            'spans.*.strand_length'         => 'nullable|numeric|min:0',
-            'spans.*.number_of_runs'        => 'nullable|integer|min:1',
+            'spans.*.from_pole_index'       => 'required_with:spans|string|max:50',
+            'spans.*.to_pole_index'         => 'required_with:spans|string|max:50',
+            'spans.*.strand_length'         => 'required_with:spans|numeric|min:0',
+            'spans.*.number_of_runs'        => 'required_with:spans|integer|min:1',
             'spans.*.components'            => 'nullable|array',
             'spans.*.components.node'       => 'nullable|integer|min:0',
             'spans.*.components.amplifier'  => 'nullable|integer|min:0',
@@ -517,24 +511,20 @@ class AsBuiltController extends Controller
             $createdSpans  = [];
             $updatedSpans  = [];
             $errors        = [];
-            $barangayNames = [];
 
             // pole_index → skycable_pole id  (e.g. "NPT-1", "CV8-001")
-            // sequence is the TEARDOWN ORDER assigned by lineman, NOT used for import.
+            // sequence is reserved for lineman teardown order — AsBuilt never writes it.
             $indexMap = [];
-            $seqMap   = []; // kept for backward compat only
 
             // ── 1. Upsert Poles ───────────────────────────────────────────────
             foreach ($request->poles as $idx => $poleData) {
                 $poleIndex = isset($poleData['pole_index']) ? strtoupper(trim($poleData['pole_index'])) : null;
-                $seq       = isset($poleData['sequence'])   ? (int) $poleData['sequence'] : null;
                 $code      = strtoupper(trim($poleData['pole_code']));
                 $lat       = $this->normalizeCoordinate($poleData['lat'] ?? $poleData['latitude'] ?? null);
                 $lng       = $this->normalizeCoordinate($poleData['lng'] ?? $poleData['longitude'] ?? null);
 
-                // At least one of pole_index or sequence must be present
-                if (! $poleIndex && ! $seq) {
-                    $errors[] = "poles[{$idx}]: either pole_index or sequence is required";
+                if (! $poleIndex) {
+                    $errors[] = "poles[{$idx}]: pole_index is required";
                     continue;
                 }
                 if (! $code) {
@@ -543,29 +533,16 @@ class AsBuiltController extends Controller
                 }
 
                 // Prevent duplicates within this import batch
-                $lookupKey = $poleIndex ?? (string) $seq;
-                if (isset($indexMap[$lookupKey])) {
-                    $errors[] = "poles[{$idx}]: duplicate pole_index/sequence '{$lookupKey}'";
+                if (isset($indexMap[$poleIndex])) {
+                    $errors[] = "poles[{$idx}]: duplicate pole_index '{$poleIndex}'";
                     continue;
                 }
-                if (! empty($poleData['barangay_name'])) {
-                    $barangayNames[] = trim($poleData['barangay_name']);
-                }
+                // Find existing pole by pole_index first, then pole_code
+                $skycablePole = SkycablePole::with('pole')
+                    ->where('node_id', $node->id)
+                    ->where('pole_index', $poleIndex)
+                    ->first();
 
-                // Try to find existing pole by pole_index first, then sequence, then code
-                $skycablePole = null;
-                if ($poleIndex) {
-                    $skycablePole = SkycablePole::with('pole')
-                        ->where('node_id', $node->id)
-                        ->where('pole_index', $poleIndex)
-                        ->first();
-                }
-                if (! $skycablePole && $seq) {
-                    $skycablePole = SkycablePole::with('pole')
-                        ->where('node_id', $node->id)
-                        ->where('sequence', $seq)
-                        ->first();
-                }
                 if (! $skycablePole) {
                     $skycablePole = SkycablePole::with('pole')
                         ->where('node_id', $node->id)
@@ -578,10 +555,9 @@ class AsBuiltController extends Controller
                     if ($lat !== null && $lng !== null) {
                         $pole->update(['lat' => $lat, 'lng' => $lng]);
                     }
-                    $skycablePole->update(array_filter([
-                        'sequence'   => $seq ?? $skycablePole->sequence,
-                        'pole_index' => $poleIndex,
-                    ], fn ($v) => $v !== null));
+                    if ($poleIndex !== null) {
+                        $skycablePole->update(['pole_index' => $poleIndex]);
+                    }
                     $updatedPoles[] = $code;
                 } else {
                     $pole = Pole::firstOrCreate(
@@ -594,24 +570,12 @@ class AsBuiltController extends Controller
                     $skycablePole = SkycablePole::create([
                         'node_id'    => $node->id,
                         'pole_id'    => $pole->id,
-                        'sequence'   => $seq ?? ++$autoSeq,
                         'pole_index' => $poleIndex,
                     ]);
                     $createdPoles[] = $code;
                 }
 
-                // Register under BOTH pole_index AND sequence for span resolution
-                $indexMap[$lookupKey] = $skycablePole->id;
-                if ($poleIndex) $indexMap[$poleIndex] = $skycablePole->id;
-                if ($seq)       $seqMap[$seq]         = $skycablePole->id;
-            }
-
-            // Auto-set node barangay_name from majority
-            if ($barangayNames) {
-                $counts = array_count_values($barangayNames);
-                arsort($counts);
-                $node->barangay_name = array_key_first($counts);
-                $node->save();
+                $indexMap[$poleIndex] = $skycablePole->id;
             }
 
             // ── 2. Upsert Spans ───────────────────────────────────────────────
@@ -631,11 +595,11 @@ class AsBuiltController extends Controller
                 }
 
                 if ($fromKey === null) {
-                    $errors[] = "spans[{$idx}]: from_pole_index or from_sequence is required";
+                    $errors[] = "spans[{$idx}]: from_pole_index is required";
                     continue;
                 }
                 if ($toKey === null) {
-                    $errors[] = "spans[{$idx}]: to_pole_index or to_sequence is required";
+                    $errors[] = "spans[{$idx}]: to_pole_index is required";
                     continue;
                 }
 
@@ -666,14 +630,14 @@ class AsBuiltController extends Controller
 
                 if ($span) {
                     $span->update(['node_id' => $node->id]);
-                    $updatedSpans[] = "seq{$fromSeq}→seq{$toSeq}";
+                    $updatedSpans[] = "{$fromKey}→{$toKey}";
                 } else {
                     $span = SkycableSpan::create([
                         'node_id'      => $node->id,
                         'from_pole_id' => $fromSkId,
                         'to_pole_id'   => $toSkId,
                     ]);
-                    $createdSpans[] = "seq{$fromSeq}→seq{$toSeq}";
+                    $createdSpans[] = "{$fromKey}→{$toKey}";
                 }
 
                 SkycableSpanSummary::updateOrCreate(
@@ -742,17 +706,13 @@ class AsBuiltController extends Controller
 
     private function matchExistingNodePole(int $nodeId, string $code, ?float $lat, ?float $lng, array $usedSkycablePoleIds): ?SkycablePole
     {
-        $existing = SkycablePole::with('pole')
+        // Canvas (sitemap reader) has no GPS — X/Y only. No GPS coordinate matching.
+        // This is a fallback for re-imports where pole_index already exists on the record.
+        return SkycablePole::with('pole')
             ->where('node_id', $nodeId)
             ->whereNotIn('id', $usedSkycablePoleIds ?: [0])
             ->whereHas('pole', fn ($q) => $q->where('pole_code', $code))
-            ->orderBy('sequence')
-            ->get();
-
-        if ($existing->isEmpty()) return null;
-
-        return $existing->first(fn ($sp) => $this->poleMatchesCoordinates($sp->pole, $lat, $lng))
-            ?? $existing->first();
+            ->first();
     }
 
     private function preparePoleForNodeImport(SkycablePole $skycablePole, string $code, ?float $lat, ?float $lng): Pole
@@ -781,14 +741,6 @@ class AsBuiltController extends Controller
         return $pole->fresh();
     }
 
-    private function poleMatchesCoordinates(?Pole $pole, ?float $lat, ?float $lng): bool
-    {
-        if (! $pole) return false;
-        if ($lat === null || $lng === null) return $pole->lat === null && $pole->lng === null;
-
-        return $this->coordinatesEqual($pole->lat, $lat) && $this->coordinatesEqual($pole->lng, $lng);
-    }
-
     private function coordinatesEqual(mixed $stored, float $incoming): bool
     {
         if ($stored === null || $stored === '') return false;
@@ -800,33 +752,13 @@ class AsBuiltController extends Controller
         $entries = $poleCodeToEntries[$code] ?? [];
         if (count($entries) === 0) return null;
 
-        $lat = $this->normalizeCoordinate(
-            $spanData["{$side}_latitude"] ?? $spanData["{$side}_pole_latitude"] ?? $spanData["{$side}_lat"] ?? null
-        );
-        $lng = $this->normalizeCoordinate(
-            $spanData["{$side}_longitude"] ?? $spanData["{$side}_pole_longitude"] ?? $spanData["{$side}_lng"] ?? null
-        );
+        // pole_index is the only resolution key. Canvas (sitemap reader) has no GPS — X/Y only.
+        // No GPS fallback, no array-position fallback. No index match = span is skipped.
+        $sourceIndex = $spanData["{$side}_pole_index"] ?? null;
+        if ($sourceIndex === null) return null;
 
-        if ($lat !== null && $lng !== null) {
-            $match = collect($entries)->first(
-                fn ($e) => $this->coordinatesEqual($e['latitude'], $lat) && $this->coordinatesEqual($e['longitude'], $lng)
-            );
-            if ($match) return $match;
-        }
-
-        $sourceIndex = $spanData["{$side}_pole_index"] ?? $spanData["{$side}_index"] ?? null;
-        if ($sourceIndex !== null) {
-            $idx = (int) $sourceIndex;
-            // 1. Match against explicit pole_index field (preferred — stable across re-ordering)
-            $match = collect($entries)->first(fn ($e) => $e['pole_index'] !== null && $e['pole_index'] === $idx);
-            if ($match) return $match;
-            // 2. Fall back to 0-based array position
-            $match = collect($entries)->first(fn ($e) => $e['source_index'] === $idx);
-            if ($match) return $match;
-            if (isset($entries[$idx])) return $entries[$idx];
-        }
-
-        return $entries[0];
+        $idx = (int) $sourceIndex;
+        return collect($entries)->first(fn ($e) => $e['pole_index'] !== null && $e['pole_index'] === $idx);
     }
 
     private function clearSkycableMapCaches(): void

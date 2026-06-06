@@ -218,6 +218,10 @@
         max-width: 980px;
       }
     }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -247,7 +251,7 @@
         </nav>
 
         <div class="flex items-center gap-3">
-          <a href="/login" class="hidden sm:inline-flex items-center rounded-full bg-[#0A5C3B] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#0c6a43] shadow-[0_12px_26px_rgba(10,92,59,0.16)]">
+          <a href="https://dashboard.telcovantage.com" target="_blank" rel="noopener noreferrer" class="hidden sm:inline-flex items-center rounded-full bg-[#0A5C3B] px-5 py-2.5 text-sm font-bold text-white transition hover:bg-[#0c6a43] shadow-[0_12px_26px_rgba(10,92,59,0.16)]">
             Login
           </a>
 
@@ -493,6 +497,45 @@
       </div>
     </section>
 
+    {{-- AsBuilt IQ — connection between teardown process and data export --}}
+    <section class="py-16 md:py-24 bg-transparent">
+      <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+
+        <div class="reveal-up text-center mb-10">
+          <p class="text-xs font-bold tracking-[0.3em] text-gray-500 uppercase mb-3">Powered by TelcoVantage</p>
+          <h2 class="headline text-3xl sm:text-4xl font-extrabold brand-text">Twinbackend <span class="text-[#2563EB]">×</span> Telcovantage Polemaster</h2>
+          <div class="gradient-line mx-auto mt-4 h-px w-48"></div>
+          <p class="mt-5 max-w-2xl mx-auto text-sm sm:text-base leading-7 text-slate-600">
+            The tool linemen use on the ground — scan, map, and export pole and span data directly from the field into the TelcoVantage platform in real time.
+          </p>
+
+          <div class="mt-7 inline-flex items-center gap-2 rounded-full border border-[rgba(10,92,59,0.15)] bg-white/70 px-5 py-2 shadow-sm">
+            <i class="fa-solid fa-layer-group text-[#0A5C3B] text-xs"></i>
+            <span class="text-xs font-bold tracking-[0.22em] uppercase text-slate-600">Our Applications &amp; Tools</span>
+          </div>
+        </div>
+
+        <div class="reveal-up flex justify-center">
+          <div class="relative w-full max-w-5xl">
+            <div class="glass-card rounded-[2rem] overflow-hidden shadow-[0_32px_80px_rgba(10,92,59,0.12)] border border-[rgba(10,92,59,0.10)]">
+              <img
+                src="/assets/images/asbuilt-app.png"
+                alt="Twinbackend × Polemaster"
+                class="w-full h-auto object-contain block"
+              />
+            </div>
+
+            {{-- connector label --}}
+            <div class="absolute -bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full bg-white border border-[rgba(10,92,59,0.14)] px-5 py-2 shadow-md text-xs font-semibold text-[#0A5C3B] whitespace-nowrap">
+              <i class="fa-solid fa-arrow-up-from-bracket text-[#2563EB]"></i>
+              Polemaster field data → synced to Twinbackend dashboard
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
     <section id="services" class="bg-transparent py-20 md:py-28">
       <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div class="reveal-up text-center mb-14">
@@ -500,45 +543,35 @@
           <h2 class="headline text-3xl sm:text-4xl font-extrabold uppercase brand-text mb-4">Our Services</h2>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-10 gap-y-10 max-w-6xl mx-auto stagger-group">
-          <article class="service-card stagger-item glass-card rounded-3xl p-7 text-center sm:text-left">
-            <div class="service-icon w-12 h-12 mb-5 text-slate-800 mx-auto sm:mx-0 flex items-center justify-center rounded-2xl bg-white shadow-sm">
-              <i class="fa-solid fa-tower-broadcast text-[24px]"></i>
-            </div>
-            <h3 class="text-[1.45rem] leading-tight md:text-lg font-bold text-gray-900 mb-3">Fixed And Wireless Network Rollout</h3>
-            <p class="text-gray-600 text-sm leading-8">Delivering efficient fixed and wireless network rollout through streamlined planning, deployment, and integration aligned with industry standards.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6 max-w-7xl mx-auto stagger-group">
+          <article class="stagger-item glass-card rounded-2xl p-6 text-center text-slate-900">
+            <div class="mb-3 text-[#0A5C3B] text-xl"><i class="fa-solid fa-tower-broadcast"></i></div>
+            <div class="font-bold text-base mb-2">Fixed And Wireless Network Rollout</div>
+            <p class="text-xs leading-6 text-slate-500">Delivering efficient fixed and wireless network rollout through streamlined planning, deployment, and integration aligned with industry standards.</p>
           </article>
 
-          <article class="service-card stagger-item glass-card rounded-3xl p-7 text-center sm:text-left">
-            <div class="service-icon w-12 h-12 mb-5 text-slate-800 mx-auto sm:mx-0 flex items-center justify-center rounded-2xl bg-white shadow-sm">
-              <i class="fa-solid fa-screwdriver-wrench text-[24px]"></i>
-            </div>
-            <h3 class="text-[1.45rem] leading-tight md:text-lg font-bold text-gray-900 mb-3">Network And Site Modernization</h3>
-            <p class="text-gray-600 text-sm leading-8">Decommissioning and dismantling of legacy systems and sites, upgrading telecom infrastructures by safely sunsetting outdated systems.</p>
+          <article class="stagger-item glass-card rounded-2xl p-6 text-center text-slate-900">
+            <div class="mb-3 text-[#2563EB] text-xl"><i class="fa-solid fa-screwdriver-wrench"></i></div>
+            <div class="font-bold text-base mb-2">Network And Site Modernization</div>
+            <p class="text-xs leading-6 text-slate-500">Decommissioning and dismantling of legacy systems and sites, upgrading telecom infrastructures by safely sunsetting outdated systems.</p>
           </article>
 
-          <article class="service-card stagger-item glass-card rounded-3xl p-7 text-center sm:text-left">
-            <div class="service-icon w-12 h-12 mb-5 text-slate-800 mx-auto sm:mx-0 flex items-center justify-center rounded-2xl bg-white shadow-sm">
-              <i class="fa-solid fa-recycle text-[24px]"></i>
-            </div>
-            <h3 class="text-[1.45rem] leading-tight md:text-lg font-bold text-gray-900 mb-3">Legacy Asset Harvesting</h3>
-            <p class="text-gray-600 text-sm leading-8">Recovering value from retired telecom assets for revenue and funding innovation.</p>
+          <article class="stagger-item glass-card rounded-2xl p-6 text-center text-slate-900">
+            <div class="mb-3 text-[#0A5C3B] text-xl"><i class="fa-solid fa-recycle"></i></div>
+            <div class="font-bold text-base mb-2">Legacy Asset Harvesting</div>
+            <p class="text-xs leading-6 text-slate-500">Recovering value from retired telecom assets for revenue and funding innovation.</p>
           </article>
 
-          <article class="service-card stagger-item glass-card rounded-3xl p-7 text-center sm:text-left">
-            <div class="service-icon w-12 h-12 mb-5 text-slate-800 mx-auto sm:mx-0 flex items-center justify-center rounded-2xl bg-white shadow-sm">
-              <i class="fa-solid fa-chart-line text-[24px]"></i>
-            </div>
-            <h3 class="text-[1.45rem] leading-tight md:text-lg font-bold text-gray-900 mb-3">Radio Network Planning</h3>
-            <p class="text-gray-600 text-sm leading-8">Ensuring telecom sites meet industry standards through comprehensive evaluation and optimization of network performance, coverage, and reliability.</p>
+          <article class="stagger-item glass-card rounded-2xl p-6 text-center text-slate-900">
+            <div class="mb-3 text-[#2563EB] text-xl"><i class="fa-solid fa-chart-line"></i></div>
+            <div class="font-bold text-base mb-2">Radio Network Planning</div>
+            <p class="text-xs leading-6 text-slate-500">Ensuring telecom sites meet industry standards through comprehensive evaluation and optimization of network performance, coverage, and reliability.</p>
           </article>
 
-          <article class="service-card stagger-item glass-card rounded-3xl p-7 text-center sm:text-left">
-            <div class="service-icon w-12 h-12 mb-5 text-slate-800 mx-auto sm:mx-0 flex items-center justify-center rounded-2xl bg-white shadow-sm">
-              <i class="fa-solid fa-clipboard-list text-[24px]"></i>
-            </div>
-            <h3 class="text-[1.45rem] leading-tight md:text-lg font-bold text-gray-900 mb-3">Network Site Technical Audits</h3>
-            <p class="text-gray-600 text-sm leading-8">Ensuring telecom sites meet industry standards with comprehensive technical evaluation and site assessment.</p>
+          <article class="stagger-item glass-card rounded-2xl p-6 text-center text-slate-900">
+            <div class="mb-3 text-[#0A5C3B] text-xl"><i class="fa-solid fa-clipboard-list"></i></div>
+            <div class="font-bold text-base mb-2">Network Site Technical Audits</div>
+            <p class="text-xs leading-6 text-slate-500">Ensuring telecom sites meet industry standards with comprehensive technical evaluation and site assessment.</p>
           </article>
         </div>
       </div>
@@ -928,10 +961,10 @@
       contactForm.addEventListener('submit', async function (e) {
         e.preventDefault();
 
+        // Loading state
         submitBtn.disabled = true;
-        submitBtn.textContent = 'Sending...';
-        formStatus.classList.add('hidden');
-        formStatus.className = 'hidden rounded-2xl px-4 py-3 text-sm';
+        submitBtn.innerHTML = '<span style="display:inline-flex;align-items:center;gap:10px;justify-content:center"><svg style="animation:spin 0.8s linear infinite;width:18px;height:18px;flex-shrink:0" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.35)" stroke-width="3"/><path d="M12 2a10 10 0 0 1 10 10" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>Sending…</span>';
+        formStatus.className = 'hidden';
 
         try {
           const response = await fetch(contactForm.action, {
@@ -949,16 +982,18 @@
             throw new Error(data.message || 'Something went wrong.');
           }
 
-          formStatus.textContent = data.message || 'Your message has been sent successfully.';
-          formStatus.className = 'rounded-2xl px-4 py-3 text-sm bg-green-50 text-green-700 border border-green-200';
+          // Success — change button, keep disabled
+          submitBtn.innerHTML = '<span style="display:inline-flex;align-items:center;gap:8px;justify-content:center"><svg style="width:18px;height:18px;flex-shrink:0" viewBox="0 0 24 24" fill="none"><path d="M5 13l4 4L19 7" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Email Successfully Sent — Thank you!</span>';
+          submitBtn.style.background = 'linear-gradient(135deg,#059669,#0A5C3B)';
           contactForm.reset();
+
         } catch (error) {
-          formStatus.textContent = error.message || 'Unable to send your message right now.';
+          // Error — show error message, restore button
+          formStatus.textContent = error.message || 'Unable to send your message. Please try again.';
           formStatus.className = 'rounded-2xl px-4 py-3 text-sm bg-red-50 text-red-700 border border-red-200';
-        } finally {
-          formStatus.classList.remove('hidden');
           submitBtn.disabled = false;
-          submitBtn.textContent = 'Send Message';
+          submitBtn.innerHTML = 'Send Message';
+          submitBtn.style.background = '';
         }
       });
     }

@@ -92,12 +92,18 @@ Route::post('/contact-send', function (\Illuminate\Http\Request $request) {
         'message'    => 'required|string|max:5000',
     ]);
 
-    // Log the message or perform mailing if needed in the future
-    \Illuminate\Support\Facades\Log::info('Contact submission: ', $request->only(['first_name', 'last_name', 'email', 'company', 'message']));
+    \Illuminate\Support\Facades\Mail::to($request->email)->send(
+        new \App\Mail\ContactThankyou(
+            firstName:   $request->first_name,
+            lastName:    $request->last_name,
+            company:     $request->company,
+            userMessage: $request->message,
+        )
+    );
 
     return response()->json([
-        'status' => 'success',
-        'message' => 'Your message has been sent successfully.',
+        'status'  => 'success',
+        'message' => 'Your message has been sent. Thank you for reaching out!',
     ]);
 })->name('contact.send');
 

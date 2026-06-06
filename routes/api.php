@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api;
+use App\Http\Controllers\Api\MaintenanceController as ApiMaintenanceController;
 
 /*
 |--------------------------------------------------------------------------
